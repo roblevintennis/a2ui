@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 from a2ui.core import Catalog
 from a2ui.inference_formats.decision import (
     CatalogDecisionGraph,
     PointerSummary,
+    SlotBinding,
     SlotKind,
     inspect_payload_pointers,
 )
@@ -360,7 +362,7 @@ class TestPayloadInspector:
             value_type="number",
             cardinality=1,
             semantic_type="number",
-            label="Cpu",
+            label="CPU",
         )
         assert by_path["/metrics/cores"] == PointerSummary(
             path="/metrics/cores",
@@ -594,3 +596,60 @@ class TestCatalogDecisionGraph:
         assert graph.protocol_version in ("v0.9", "0.9")
         assert graph.checkable_functions() == ("isValidTicker",)
         assert graph.get_component("NonExistent") is None
+
+    def test_declared_functions_all_filtered_and_deduplicated(self) -> None:
+        fin_cat = _make_finance_catalog("1.0")
+        hc_cat = _make_healthcare_catalog()
+        graph = CatalogDecisionGraph([fin_cat, hc_cat])
+
+        assert graph.declared_functions() == (
+            "isValidTicker",
+            "formatCurrency",
+            "isSafeDosage",
+            "computeBmi",
+        )
+        assert graph.declared_functions(
+            "https://example.com/catalogs/finance/v1/catalog.json"
+        ) == ("isValidTicker", "formatCurrency")
+        assert graph.declared_functions(
+            "https://example.com/catalogs/healthcare/v1/catalog.json"
+        ) == ("isSafeDosage", "computeBmi")
+        assert graph.declared_functions("https://example.com/unknown") == ()
+
+        # Deduplicates repeated function names across catalogs while preserving order.
+        dup_schema: dict[str, Any] = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "catalogId": "https://example.com/catalogs/extra/v1/catalog.json",
+            "protocolVersion": "1.0",
+            "components": {},
+            "functions": {
+                "formatCurrency": {
+                    "type": "object",
+                    "returnType": "string",
+                    "properties": {"@call": {"const": "formatCurrency"}},
+                    "required": ["@call"],
+                },
+                "customHelper": {
+                    "type": "object",
+                    "returnType": "string",
+                    "properties": {"@call": {"const": "customHelper"}},
+                    "required": ["@call"],
+                },
+            },
+        }
+        dup_graph = CatalogDecisionGraph([fin_cat, Catalog.from_json(dup_schema)])
+        assert dup_graph.declared_functions() == (
+            "isValidTicker",
+            "formatCurrency",
+            "customHelper",
+        )
+
+    def test_slot_binding_format_hints_coercion_and_equality(self) -> None:
+        binding = SlotBinding(
+            pointer="/cpu",
+            format_hints=MappingProxyType({"format": "percent", "scale": 100}),
+        )
+        assert binding.format_hints == {"format": "percent", "scale": 100}
+        assert isinstance(binding.format_hints, dict)
+        assert binding == SlotBinding(pointer="/cpu")
+        assert hash(binding) == hash(SlotBinding(pointer="/cpu"))
