@@ -358,12 +358,81 @@ class TestDetectorPrecedenceAndHints:
             ("skip_forward", "Skip forward"),
             ("uptimeHours", "Uptime hours"),
             ("newEpisodes", "New episodes"),
-            ("URLPath", "Url path"),
+            ("URLPath", "URL path"),
+            ("totalUsd", "Total USD"),
+            ("orderId", "Order ID"),
+            ("cpu", "CPU"),
+            ("url", "URL"),
+            ("apiKey", "API key"),
             ("", ""),
         ],
     )
     def test_humanize_key(self, raw_key: str, expected_label: str) -> None:
         assert humanize_key(raw_key) == expected_label
+
+    @pytest.mark.parametrize(
+        ("value", "key", "expected_type", "expected_currency"),
+        [
+            (148.50, "totalUsd", SemanticType.CURRENCY, "USD"),
+            (99.0, "subtotalEur", SemanticType.CURRENCY, "EUR"),
+            (45.0, "priceGbp", SemanticType.CURRENCY, "GBP"),
+            (1200, "feeJpy", SemanticType.CURRENCY, "JPY"),
+        ],
+    )
+    def test_iso_currency_suffix_detection(
+        self,
+        value: int | float,
+        key: str,
+        expected_type: SemanticType,
+        expected_currency: str,
+    ) -> None:
+        sem_type, hints = classify_scalar(value, key)
+        assert sem_type == expected_type
+        assert hints["currency"] == expected_currency
+
+    @pytest.mark.parametrize(
+        ("value", "key", "expected_type"),
+        [
+            (412, "uptimeHours", SemanticType.INTEGER),
+            (1.5, "uptimeHours", SemanticType.NUMBER),
+            (24, "uptimeHrs", SemanticType.INTEGER),
+            (8, "shiftHr", SemanticType.INTEGER),
+            (12, "retentionHour", SemanticType.INTEGER),
+        ],
+    )
+    def test_hour_unit_suffix_hints_preserve_numeric_type(
+        self, value: int | float, key: str, expected_type: SemanticType
+    ) -> None:
+        sem_type, hints = classify_scalar(value, key)
+        assert sem_type == expected_type
+        assert hints["unit"] == "hrs"
+
+    @pytest.mark.parametrize(
+        ("value", "key"),
+        [
+            (0.78, "cpu"),
+            (0.12, "cpuDelta"),
+            (-0.18, "cpuDelta"),
+            (0.65, "utilization"),
+            (0.4, "load"),
+            (0.85, "memory"),
+            (0.5, "disk"),
+        ],
+    )
+    def test_telemetry_ratio_float_hints(self, value: float, key: str) -> None:
+        sem_type, hints = classify_scalar(value, key)
+        assert sem_type == SemanticType.NUMBER
+        assert hints["format"] == "percent"
+        assert hints["scale"] == 100
+
+    def test_telemetry_ratio_out_of_range_or_int_omits_percent_format(self) -> None:
+        sem_type, hints = classify_scalar(72.5, "cpu")
+        assert sem_type == SemanticType.NUMBER
+        assert "format" not in hints
+
+        int_type, int_hints = classify_scalar(1, "cpu")
+        assert int_type == SemanticType.INTEGER
+        assert "format" not in int_hints
 
 
 class TestFixturePayloadPointerSemantics:

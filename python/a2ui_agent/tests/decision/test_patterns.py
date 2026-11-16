@@ -1529,3 +1529,429 @@ def test_stamp_function_calls_and_hatch_build_hook_empty_build_data(
     hook.initialize("0.1.0", build_data)
     assert "force_include" in build_data
     assert len(build_data["force_include"]) == 4
+
+
+def test_refined_patterns_headline_label_order_and_steps_card_root() -> None:
+    catalog = BasicCatalog("v1.0")
+    lib = MergedPatternLibrary.for_catalogs([catalog])
+    expander = PatternExpander(lib, CatalogDecisionGraph([catalog]))
+
+    headline_exp = expander.expand_block(
+        "headline",
+        "headline",
+        BlockBindings(
+            slots={
+                "items": SlotBinding(
+                    items=(
+                        {
+                            "label": SlotBinding(literal="Price from"),
+                            "value": SlotBinding(
+                                pointer="/priceFrom",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={
+                                    "semantic_type": SemanticType.CURRENCY,
+                                    "currency": "USD",
+                                },
+                            ),
+                        },
+                    )
+                )
+            }
+        ),
+    )
+    validate_payload([catalog], _wrap_surface(headline_exp.components))
+    hl_by_id = {c["id"]: c for c in headline_exp.components}
+    assert hl_by_id["headline_0_headline_item_col"]["children"] == [
+        "headline_0_headline_label",
+        "headline_0_headline_value",
+    ]
+    assert hl_by_id["headline_0_headline_value"]["text"] == {
+        "@call": "formatString",
+        "args": {
+            "value": (
+                "### ${formatCurrency(value:${/priceFrom}, currency:'USD', decimals:2)}"
+            )
+        },
+    }
+
+    steps_exp = expander.expand_block(
+        "steps",
+        "steps",
+        BlockBindings(
+            slots={
+                "items": SlotBinding(
+                    items=({"title": SlotBinding(literal="Step One")},)
+                )
+            }
+        ),
+    )
+    validate_payload([catalog], _wrap_surface(steps_exp.components))
+    assert steps_exp.components[0]["id"] == "steps_root"
+    assert steps_exp.components[0]["component"] == "Card"
+    steps_by_id = {c["id"]: c for c in steps_exp.components}
+    assert steps_by_id[steps_exp.components[0]["child"]]["component"] == "List"
+
+
+def test_format_directive_basic_catalog_and_runtime_evaluation() -> None:
+    from a2ui.core import DataContext, DataModel, SurfaceModel
+
+    catalog = BasicCatalog("v1.0")
+    lib = MergedPatternLibrary.for_catalogs([catalog])
+    expander = PatternExpander(lib, CatalogDecisionGraph([catalog]))
+
+    facts_exp = expander.expand_block(
+        "facts",
+        "facts",
+        BlockBindings(
+            slots={
+                "rows": SlotBinding(
+                    items=(
+                        {
+                            "label": SlotBinding(literal="Amount"),
+                            "value": SlotBinding(
+                                pointer="/amount",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={
+                                    "semantic_type": SemanticType.CURRENCY,
+                                    "currency": "EUR",
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Uptime"),
+                            "value": SlotBinding(
+                                pointer="/uptimeHours",
+                                semantic_type=SemanticType.INTEGER,
+                                format_hints={
+                                    "semantic_type": SemanticType.INTEGER,
+                                    "unit": "hrs",
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="CPU"),
+                            "value": SlotBinding(
+                                pointer="/cpu",
+                                semantic_type=SemanticType.NUMBER,
+                                format_hints={
+                                    "semantic_type": SemanticType.NUMBER,
+                                    "format": "percent",
+                                    "scale": 100,
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Tax rate"),
+                            "value": SlotBinding(
+                                pointer="/taxRate",
+                                semantic_type=SemanticType.PERCENT,
+                                format_hints={"semantic_type": SemanticType.PERCENT},
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Host"),
+                            "value": SlotBinding(
+                                pointer="/host",
+                                semantic_type=SemanticType.STRING,
+                                format_hints={"semantic_type": SemanticType.STRING},
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Already formatted"),
+                            "value": SlotBinding(
+                                pointer="/formattedPrice",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={
+                                    "semantic_type": SemanticType.CURRENCY,
+                                    "currency": "USD",
+                                    "alreadyFormatted": True,
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Literal int"),
+                            "value": SlotBinding(literal=42),
+                        },
+                        {
+                            "label": SlotBinding(literal="Unbound"),
+                            "value": SlotBinding(),
+                        },
+                    )
+                )
+            }
+        ),
+    )
+    validate_payload([catalog], _wrap_surface(facts_exp.components))
+    by_id = {c["id"]: c for c in facts_exp.components}
+    assert by_id["facts_0_facts_value"]["text"] == {
+        "@call": "formatCurrency",
+        "args": {
+            "value": {"@path": "/amount"},
+            "currency": "EUR",
+            "decimals": 2,
+        },
+    }
+    assert by_id["facts_1_facts_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "${formatNumber(value:${/uptimeHours})} hrs"},
+    }
+    assert by_id["facts_2_facts_value"]["text"] == {
+        "@call": "formatNumber",
+        "args": {"value": {"@path": "/cpu"}, "decimals": 2},
+    }
+    assert by_id["facts_3_facts_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "${formatNumber(value:${/taxRate})}%"},
+    }
+    assert by_id["facts_4_facts_value"]["text"] == {"@path": "/host"}
+    assert by_id["facts_5_facts_value"]["text"] == {"@path": "/formattedPrice"}
+    assert by_id["facts_6_facts_value"]["text"] == "42"
+    assert by_id["facts_7_facts_value"]["text"] == ""
+
+    hl_exp = expander.expand_block(
+        "headline",
+        "headline",
+        BlockBindings(
+            slots={
+                "items": SlotBinding(
+                    items=(
+                        {
+                            "label": SlotBinding(literal="Price"),
+                            "value": SlotBinding(
+                                pointer="/amount",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={"semantic_type": SemanticType.CURRENCY},
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Uptime"),
+                            "value": SlotBinding(
+                                pointer="/uptimeHours",
+                                semantic_type=SemanticType.INTEGER,
+                                format_hints={
+                                    "semantic_type": SemanticType.INTEGER,
+                                    "unit": "hrs",
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Rating"),
+                            "value": SlotBinding(
+                                pointer="/rating",
+                                semantic_type=SemanticType.RATING,
+                                format_hints={"semantic_type": SemanticType.RATING},
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Literal"),
+                            "value": SlotBinding(literal="Room #4\nSuite"),
+                        },
+                    )
+                )
+            }
+        ),
+    )
+    validate_payload([catalog], _wrap_surface(hl_exp.components))
+    hl_by_id = {c["id"]: c for c in hl_exp.components}
+    assert hl_by_id["headline_1_headline_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "### ${formatNumber(value:${/uptimeHours})} hrs"},
+    }
+    assert hl_by_id["headline_2_headline_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "### ${formatNumber(value:${/rating})}"},
+    }
+    assert hl_by_id["headline_3_headline_value"]["text"] == r"### Room \#4 Suite"
+
+    # Evaluate the emitted expressions against a real v1.0 SurfaceModel + DataContext.
+    surface = SurfaceModel("eval_surface", catalog)
+    surface.data_model = DataModel({
+        "amount": 50,
+        "uptimeHours": 412,
+        "cpu": 0.78,
+        "taxRate": 12.5,
+        "rating": 4.6,
+        "host": "prod-1",
+        "formattedPrice": "$1,250.00",
+    })
+    errors: list[dict[str, Any]] = []
+    surface.on_error.subscribe(errors.append)
+    ctx = DataContext(surface, path="/")
+    assert ctx.resolve_dynamic_value(by_id["facts_0_facts_value"]["text"]) == "€50.00"
+    assert ctx.resolve_dynamic_value(by_id["facts_1_facts_value"]["text"]) == "412 hrs"
+    assert ctx.resolve_dynamic_value(by_id["facts_2_facts_value"]["text"]) == "0.78"
+    assert ctx.resolve_dynamic_value(by_id["facts_3_facts_value"]["text"]) == "12.5%"
+    assert ctx.resolve_dynamic_value(hl_by_id["headline_0_headline_value"]["text"]) == (
+        "### $50.00"
+    )
+    assert hl_by_id["headline_1_headline_value"]["text"]
+    assert ctx.resolve_dynamic_value(hl_by_id["headline_1_headline_value"]["text"]) == (
+        "### 412 hrs"
+    )
+    assert ctx.resolve_dynamic_value(hl_by_id["headline_2_headline_value"]["text"]) == (
+        "### 4.6"
+    )
+    assert errors == []
+
+
+def test_format_directive_custom_catalog_falls_back_gracefully() -> None:
+    basic_raw = copy.deepcopy(load_asset("patterns/basic_v1_0.json"))
+    basic_schema = copy.deepcopy(BasicCatalog("v1.0").to_json())
+
+    def _make_catalog(cat_id: str, kept_functions: set[str]) -> Catalog:
+        schema = copy.deepcopy(basic_schema)
+        schema["catalogId"] = cat_id
+        schema["$id"] = cat_id
+        schema["functions"] = {
+            name: fn
+            for name, fn in schema.get("functions", {}).items()
+            if name in kept_functions
+        }
+        schema["$defs"]["anyFunction"]["oneOf"] = [
+            {"$ref": f"#/functions/{name}"} for name in kept_functions
+        ]
+        return Catalog.from_json(schema)
+
+    def _make_lib(cat_id: str) -> PatternLibrary:
+        pat_raw = copy.deepcopy(basic_raw)
+        pat_raw["catalogId"] = cat_id
+        return PatternLibrary.from_json(pat_raw)
+
+    # 1. Catalog declaring zero formatting functions falls back to `@path` bindings.
+    no_fn_id = "https://example.com/catalogs/nofns/v1/catalog.json"
+    no_fn_cat = _make_catalog(no_fn_id, set())
+    no_fn_exp = PatternExpander(_make_lib(no_fn_id), CatalogDecisionGraph([no_fn_cat]))
+
+    hl_no_fn = no_fn_exp.expand_block(
+        "headline",
+        "headline",
+        BlockBindings(
+            slots={
+                "items": SlotBinding(
+                    items=(
+                        {
+                            "label": SlotBinding(literal="Price"),
+                            "value": SlotBinding(
+                                pointer="/price",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={
+                                    "semantic_type": SemanticType.CURRENCY,
+                                    "currency": "USD",
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Uptime"),
+                            "value": SlotBinding(
+                                pointer="/uptimeHours",
+                                semantic_type=SemanticType.INTEGER,
+                                format_hints={
+                                    "semantic_type": SemanticType.INTEGER,
+                                    "unit": "hrs",
+                                },
+                            ),
+                        },
+                    )
+                )
+            }
+        ),
+    )
+    hl_by_id = {c["id"]: c for c in hl_no_fn.components}
+    assert hl_by_id["headline_0_headline_value"]["text"] == {"@path": "/price"}
+    assert hl_by_id["headline_1_headline_value"]["text"] == {"@path": "/uptimeHours"}
+    validate_payload(
+        [no_fn_cat],
+        [
+            {
+                "version": "1.0",
+                "createSurface": {"surfaceId": "s", "catalogId": no_fn_id},
+            },
+            {
+                "version": "1.0",
+                "updateComponents": {
+                    "surfaceId": "s",
+                    "components": [
+                        {
+                            "id": "root",
+                            "component": "Column",
+                            "children": ["headline_root"],
+                        },
+                        *hl_no_fn.components,
+                    ],
+                },
+            },
+        ],
+    )
+
+    # 2. Catalog declaring `formatString` only uses template/unit interpolation without `formatCurrency`/`formatNumber`.
+    str_only_id = "https://example.com/catalogs/stronly/v1/catalog.json"
+    str_only_cat = _make_catalog(str_only_id, {"formatString"})
+    str_only_exp = PatternExpander(
+        _make_lib(str_only_id), CatalogDecisionGraph([str_only_cat])
+    )
+    hl_str_only = str_only_exp.expand_block(
+        "headline",
+        "headline",
+        BlockBindings(
+            slots={
+                "items": SlotBinding(
+                    items=(
+                        {
+                            "label": SlotBinding(literal="Price"),
+                            "value": SlotBinding(
+                                pointer="/price",
+                                semantic_type=SemanticType.CURRENCY,
+                                format_hints={
+                                    "semantic_type": SemanticType.CURRENCY,
+                                    "currency": "USD",
+                                },
+                            ),
+                        },
+                        {
+                            "label": SlotBinding(literal="Uptime"),
+                            "value": SlotBinding(
+                                pointer="/uptimeHours",
+                                semantic_type=SemanticType.INTEGER,
+                                format_hints={
+                                    "semantic_type": SemanticType.INTEGER,
+                                    "unit": "hrs",
+                                },
+                            ),
+                        },
+                    )
+                )
+            }
+        ),
+    )
+    str_by_id = {c["id"]: c for c in hl_str_only.components}
+    assert str_by_id["headline_0_headline_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "### ${/price}"},
+    }
+    assert str_by_id["headline_1_headline_value"]["text"] == {
+        "@call": "formatString",
+        "args": {"value": "### ${/uptimeHours} hrs"},
+    }
+    validate_payload(
+        [str_only_cat],
+        [
+            {
+                "version": "1.0",
+                "createSurface": {"surfaceId": "s", "catalogId": str_only_id},
+            },
+            {
+                "version": "1.0",
+                "updateComponents": {
+                    "surfaceId": "s",
+                    "components": [
+                        {
+                            "id": "root",
+                            "component": "Column",
+                            "children": ["headline_root"],
+                        },
+                        *hl_str_only.components,
+                    ],
+                },
+            },
+        ],
+    )

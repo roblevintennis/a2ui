@@ -582,6 +582,9 @@ class SlotBinding:
         items: Per-item field mappings for scalar-assembled repeated slots.
         semantic_type: Semantic type of the bound pointer, when known; informs
             `$byType` dispatch.
+        format_hints: Optional detector formatting metadata (such as ``unit``,
+            ``currency``, ``format``, or ``scale``) attached to the bound
+            pointer.
     """
 
     pointer: str | None = None
@@ -589,12 +592,16 @@ class SlotBinding:
     fields: Mapping[str, SlotBinding] = field(default_factory=dict, hash=False)
     items: tuple[Mapping[str, SlotBinding], ...] = ()
     semantic_type: SemanticType | None = field(default=None, compare=False)
+    format_hints: Mapping[str, Any] = field(
+        default_factory=dict, compare=False, hash=False
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", dict(self.fields))
         object.__setattr__(self, "items", tuple(dict(item) for item in self.items))
         if self.semantic_type is not None:
             object.__setattr__(self, "semantic_type", SemanticType(self.semantic_type))
+        object.__setattr__(self, "format_hints", dict(self.format_hints))
 
     @property
     def bound(self) -> bool:
