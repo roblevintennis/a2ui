@@ -133,6 +133,7 @@
       "properties": {
         "$slot": {"$ref": "#/$defs/slotDirective"},
         "$text": {"$ref": "#/$defs/textDirective"},
+        "$format": {"$ref": "#/$defs/formatDirective"},
         "$default": {"$ref": "#/$defs/defaultDirective"},
         "$if": {"$ref": "#/$defs/ifDirective"},
         "$ifKnob": {"$ref": "#/$defs/ifKnobDirective"},
@@ -160,6 +161,20 @@
     "textDirective": {
       "type": "string",
       "description": "Literal with `{slot}` placeholders; a bound slot becomes a formatString call, `{$index1}` is the 1-based element index."
+    },
+    "formatDirective": {
+      "type": "object",
+      "description": "Optional value-formatting directive evaluated dynamically when the catalog declares formatCurrency or formatNumber.",
+      "properties": {
+        "slot": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "enum": ["currency", "number", "percent", "duration"]},
+        "template": {
+          "type": "string",
+          "description": "Optional formatString wrapper around the formatted value, using {value} as placeholder."
+        }
+      },
+      "required": ["slot"],
+      "additionalProperties": false
     },
     "defaultDirective": {
       "$ref": "#/$defs/templateValue",
