@@ -685,6 +685,8 @@ class PlannedBlock:
         instances: Per-element instance answers mapping element key to a map of
             question name to chosen option.
         probability: Gate confidence probability for the block.
+        id_prefix: Optional component-ID prefix override used when multiple
+            blocks share one `block_id` (e.g. grouped sections).
     """
 
     block_id: str
@@ -693,6 +695,7 @@ class PlannedBlock:
     bindings: BlockBindings = field(default_factory=BlockBindings)
     instances: Mapping[str, Mapping[str, str]] = field(default_factory=dict, hash=False)
     probability: float = 1.0
+    id_prefix: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "variant_knobs", dict(self.variant_knobs))

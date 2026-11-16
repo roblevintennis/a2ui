@@ -561,7 +561,10 @@
                   "$if": "heading",
                   "id": "prose_heading"
                 },
-                "prose_body"
+                {
+                  "$if": "body",
+                  "id": "prose_body"
+                }
               ]
             },
             {
@@ -592,7 +595,10 @@
                   "$if": "heading",
                   "id": "prose_heading"
                 },
-                "prose_body"
+                {
+                  "$if": "body",
+                  "id": "prose_body"
+                }
               ]
             },
             {
