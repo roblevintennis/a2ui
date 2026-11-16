@@ -439,6 +439,7 @@
     - id: "facts_row_0"
       component: "Row"
       justify: "spaceBetween"
+      align: "center"
       children:
         - "facts_0_facts_label"
         - "facts_0_facts_value"
@@ -453,6 +454,7 @@
     - id: "facts_row_1"
       component: "Row"
       justify: "spaceBetween"
+      align: "center"
       children:
         - "facts_1_facts_label"
         - "facts_1_facts_value"

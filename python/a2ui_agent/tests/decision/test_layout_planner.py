@@ -1735,3 +1735,136 @@ def test_terminal_fallback_capabilities_ineligible_pinned_family_and_urgency_at_
     )
     kept = apply_urgency_terse(two_block_plan, state)
     assert [b.block_id for b in kept.blocks] == ["prose", "facts"]
+
+
+def test_planner_populates_format_hints_from_pointer_summaries() -> None:
+    """`SlotBinding.format_hints` preserves `semantic_type` and detector `hints`."""
+    from a2ui.inference_formats.decision.models import SemanticType
+
+    # 1. HOST: `headline` value & delta carry telemetry ratio hints; `facts` carries `unit: 'hrs'`.
+    _, _, _, host_out, _ = _run_fixture(
+        HOST,
+        {
+            "family": ("monitor", 0.90),
+            "archetype:monitor": ("dashboard", 0.85),
+            "gate:banner": 0.80,
+            "gate:headline": 0.90,
+            "gate:facts": 0.80,
+            "salience:/cpu": 2.8,
+            "salience:/status": 2.1,
+            "salience:/uptimeHours": 1.2,
+            "salience:/host": 0.4,
+        },
+    )
+    assert host_out.plan is not None
+    host_blocks = {b.block_id: b for b in host_out.plan.blocks}
+    hl_items = host_blocks["headline"].bindings.get("items")
+    assert hl_items is not None
+    cpu_val = hl_items.items[0]["value"]
+    assert cpu_val.format_hints == {
+        "semantic_type": SemanticType.NUMBER,
+        "format": "percent",
+        "scale": 100,
+        "keyHint": "cpu",
+    }
+    cpu_delta = hl_items.items[0]["delta"]
+    assert cpu_delta.format_hints == {
+        "semantic_type": SemanticType.NUMBER,
+        "format": "percent",
+        "scale": 100,
+        "keyHint": "cpu_delta",
+    }
+    facts_rows = host_blocks["facts"].bindings.get("rows")
+    assert facts_rows is not None
+    uptime_row = next(
+        it["value"] for it in facts_rows.items if it["value"].pointer == "/uptimeHours"
+    )
+    assert uptime_row.format_hints == {
+        "semantic_type": SemanticType.INTEGER,
+        "unit": "hrs",
+        "keyHint": "hours",
+    }
+
+    # 2. TRANSFER: `facts` currency pointers carry `currency: 'USD'`.
+    _, _, _, transfer_out, _ = _run_fixture(
+        _TRANSFER_FIXTURE,
+        {
+            "family": ("act", 0.85),
+            "stakes": 2.1,
+            "urgency": 0.6,
+            "archetype:act": ("confirm", 0.90),
+            "gate:facts": 0.85,
+            "gate:actions": 0.90,
+            "salience:/amount": 2.9,
+            "salience:/recipient": 2.6,
+            "salience:/fee": 1.9,
+            "salience:/arrives": 1.7,
+        },
+        actions=_TRANSFER_ACTIONS,
+    )
+    assert transfer_out.plan is not None
+    tx_facts = next(b for b in transfer_out.plan.blocks if b.block_id == "facts")
+    tx_rows = tx_facts.bindings.get("rows")
+    assert tx_rows is not None
+    amount_val = next(
+        it["value"] for it in tx_rows.items if it["value"].pointer == "/amount"
+    )
+    assert amount_val.format_hints == {
+        "semantic_type": SemanticType.CURRENCY,
+        "keyHint": "amount",
+        "currency": "USD",
+    }
+
+    # 3. Orphan recovery (`no-orphaned-pointers`) and pre-formatted string scalars.
+    from a2ui.inference_formats.decision.layout_planner import (
+        apply_no_orphaned_pointers,
+    )
+
+    orphan_fixture = LayoutFixture(
+        name="orphan_units",
+        intent="Show summary",
+        payload={
+            "title": "Cluster Status",
+            "heroUrl": "https://example.com/hero.jpg",
+            "body": "Detailed narrative summary of cluster uptime and billing.",
+            "uptimeHours": 96,
+            "formattedCost": "$1,250.00",
+        },
+    )
+    orphan_planner = LayoutPlanner(ArchetypeGrammar.default(), SynthesisConfig())
+    orphan_ptrs = inspect_payload_pointers(orphan_fixture.payload)
+    orphan_batch, orphan_state = orphan_planner.build_batch(
+        intent=orphan_fixture.intent,
+        pointers=orphan_ptrs,
+        payload=orphan_fixture.payload,
+    )
+    orphan_ans = asyncio.run(ScriptedAnswers().backend().answer(orphan_batch))
+    orphan_planner.read(orphan_state, orphan_ans)
+    base_plan = LayoutPlan(
+        family="inspect",
+        archetype="detail",
+        blocks=(
+            PlannedBlock(
+                block_id="picture",
+                pattern="picture",
+                bindings=BlockBindings({"picture": SlotBinding(pointer="/heroUrl")}),
+            ),
+            PlannedBlock(
+                block_id="prose",
+                pattern="prose",
+                bindings=BlockBindings({"body": SlotBinding(pointer="/body")}),
+            ),
+        ),
+        page=PageBindings(title=SlotBinding(pointer="/title")),
+    )
+    recovered_plan = apply_no_orphaned_pointers(base_plan, orphan_state, orphan_planner)
+    orphan_facts = next(b for b in recovered_plan.blocks if b.block_id == "facts")
+    orphan_rows = orphan_facts.bindings.get("rows")
+    assert orphan_rows is not None
+    orphan_by_ptr = {it["value"].pointer: it["value"] for it in orphan_rows.items}
+    assert orphan_by_ptr["/uptimeHours"].format_hints == {
+        "semantic_type": SemanticType.INTEGER,
+        "unit": "hrs",
+        "keyHint": "hours",
+    }
+    assert orphan_by_ptr["/formattedCost"].format_hints.get("alreadyFormatted") is True
