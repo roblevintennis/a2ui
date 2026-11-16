@@ -452,3 +452,27 @@ class CatalogDecisionGraph:
                 if ret_type in ("boolean", "validationResult") and fn_name not in names:
                     names.append(fn_name)
         return tuple(names)
+
+    def declared_functions(self, catalog_id: str | None = None) -> tuple[str, ...]:
+        """Returns declared function names from catalog helpers, preserving order.
+
+        Args:
+            catalog_id: Optional catalog ID to filter functions to a single
+                catalog. When omitted, functions from all registered catalogs
+                are returned.
+
+        Returns:
+            Deduplicated tuple of declared function names in registration order.
+        """
+        if catalog_id is not None:
+            helper = self._helpers.get(catalog_id)
+            helpers: tuple[CatalogSchemaHelper, ...] = (
+                (helper,) if helper is not None else ()
+            )
+        else:
+            helpers = tuple(self._helpers.values())
+        names: dict[str, None] = {}
+        for helper in helpers:
+            for fn_name in helper.functions:
+                names.setdefault(str(fn_name), None)
+        return tuple(names)

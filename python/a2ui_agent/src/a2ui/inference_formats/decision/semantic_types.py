@@ -364,6 +364,30 @@ _CURRENCY_SYMBOL_MAP: Mapping[str, str] = {
 _CURRENCY_CODES = frozenset(
     {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "MXN", "BRL"}
 )
+_CURRENCY_SUFFIX_TOKENS = frozenset(
+    {"usd", "eur", "gbp", "jpy", "cad", "aud", "chf", "cny", "inr"}
+)
+_HOUR_UNIT_SUFFIXES = frozenset({"hr", "hrs", "hour", "hours"})
+_TELEMETRY_RATIO_KEY_HINTS = frozenset(
+    {"cpu", "cpu_delta", "utilization", "load", "memory", "disk"}
+)
+_PRESERVED_ACRONYMS = frozenset({
+    "usd",
+    "cpu",
+    "id",
+    "url",
+    "uri",
+    "api",
+    "ip",
+    "ram",
+    "gpu",
+    "ms",
+    "kb",
+    "mb",
+    "gb",
+    "tb",
+    "utc",
+})
 
 _COLOR_KEY_HINTS = frozenset({
     "color",
@@ -573,11 +597,21 @@ def _split_key_tokens(key: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _format_humanized_token(index: int, token: str) -> str:
+    """Formats a single key token, preserving known acronyms in uppercase."""
+    if token in _PRESERVED_ACRONYMS:
+        return token.upper()
+    if index == 0:
+        return token[0].upper() + token[1:]
+    return token
+
+
 def humanize_key(key: str) -> str:
     """Formats a raw JSON key or pointer segment as a human-readable label.
 
-    ``"priceFrom"`` becomes ``"Price from"`` and ``"skip_forward"`` becomes
-    ``"Skip forward"``.
+    ``"priceFrom"`` becomes ``"Price from"``, ``"skip_forward"`` becomes
+    ``"Skip forward"``, and known acronyms such as ``"totalUsd"`` become
+    ``"Total USD"``.
 
     Args:
         key: Raw JSON key or unescaped pointer segment.
@@ -588,8 +622,9 @@ def humanize_key(key: str) -> str:
     tokens = _split_key_tokens(key)
     if not tokens:
         return ""
-    joined = " ".join(tokens)
-    return joined[0].upper() + joined[1:]
+    return " ".join(
+        _format_humanized_token(idx, token) for idx, token in enumerate(tokens)
+    )
 
 
 def _match_key_hint(tokens: Sequence[str], hints: Collection[str]) -> str | None:
@@ -797,6 +832,57 @@ def _sibling_string(siblings: Mapping[str, Any] | None, field: str) -> str | Non
     return val if isinstance(val, str) and val.strip() else None
 
 
+def _detect_currency_from_number(
+    tokens: tuple[str, ...],
+    siblings: Mapping[str, Any] | None,
+) -> tuple[SemanticType, dict[str, Any]] | None:
+    """Detects numeric `currency` pointers from key hints, ISO suffixes, or siblings."""
+    curr_hint = _match_key_hint(tokens, _CURRENCY_KEY_HINTS)
+    suffix_curr = (
+        tokens[-1]
+        if len(tokens) >= 2 and tokens[-1] in _CURRENCY_SUFFIX_TOKENS
+        else None
+    )
+    if curr_hint is None and suffix_curr is None:
+        return None
+    hints: dict[str, Any] = {"keyHint": curr_hint or suffix_curr}
+    sib_curr = _sibling_string(siblings, "currency")
+    if sib_curr is not None:
+        hints["currency"] = sib_curr
+    elif suffix_curr is not None:
+        hints["currency"] = suffix_curr.upper()
+    return SemanticType.CURRENCY, hints
+
+
+def _detect_scalar_number_with_hints(
+    value: int | float,
+    tokens: tuple[str, ...],
+) -> tuple[SemanticType, dict[str, Any]]:
+    """Classifies fallback `int`/`float` pointers and attaches formatting hints."""
+    hour_hint = (
+        tokens[-1] if len(tokens) >= 2 and tokens[-1] in _HOUR_UNIT_SUFFIXES else None
+    )
+    if isinstance(value, int):
+        count_hint = _match_key_hint(tokens, _COUNT_KEY_HINTS)
+        if count_hint is not None:
+            return SemanticType.COUNT, {"keyHint": count_hint}
+        if hour_hint is not None:
+            return SemanticType.INTEGER, {"unit": "hrs", "keyHint": hour_hint}
+        return SemanticType.INTEGER, {}
+
+    hints: dict[str, Any] = {}
+    if hour_hint is not None:
+        hints["unit"] = "hrs"
+        hints["keyHint"] = hour_hint
+    elif -1.0 <= value <= 1.0:
+        ratio_hint = _match_key_hint(tokens, _TELEMETRY_RATIO_KEY_HINTS)
+        if ratio_hint is not None:
+            hints["format"] = "percent"
+            hints["scale"] = 100
+            hints["keyHint"] = ratio_hint
+    return SemanticType.NUMBER, hints
+
+
 def _detect_quantity_from_number(
     value: int | float,
     key: str,
@@ -817,13 +903,9 @@ def _detect_quantity_from_number(
         if hint is not None:
             return sem_type, {"keyHint": hint}
 
-    curr_hint = _match_key_hint(tokens, _CURRENCY_KEY_HINTS)
-    if curr_hint is not None:
-        hints: dict[str, Any] = {"keyHint": curr_hint}
-        sib_curr = _sibling_string(siblings, "currency")
-        if sib_curr is not None:
-            hints["currency"] = sib_curr
-        return SemanticType.CURRENCY, hints
+    currency = _detect_currency_from_number(tokens, siblings)
+    if currency is not None:
+        return currency
 
     sib_unit = _sibling_string(siblings, "unit")
     if sib_unit is not None and key.lower() != "unit":
@@ -835,13 +917,7 @@ def _detect_quantity_from_number(
             "keyHint": tokens[-1],
         }
 
-    if isinstance(value, int):
-        count_hint = _match_key_hint(tokens, _COUNT_KEY_HINTS)
-        if count_hint is not None:
-            return SemanticType.COUNT, {"keyHint": count_hint}
-        return SemanticType.INTEGER, {}
-
-    return SemanticType.NUMBER, {}
+    return _detect_scalar_number_with_hints(value, tokens)
 
 
 def _detect_color_from_string(

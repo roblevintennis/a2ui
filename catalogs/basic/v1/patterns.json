@@ -423,6 +423,7 @@
           "id": "headline_row",
           "component": "Row",
           "justify": "spaceBetween",
+          "align": "stretch",
           "children": {
             "$repeat": "items",
             "component": "headline_item"
@@ -437,10 +438,10 @@
         {
           "id": "headline_item_col",
           "component": "Column",
-          "align": "center",
+          "align": "start",
           "children": [
-            "headline_value",
             "headline_label",
+            "headline_value",
             {
               "$ifKnob": {
                 "deltas": ["yes"]
@@ -461,7 +462,10 @@
           "id": "headline_value",
           "component": "Text",
           "text": {
-            "$text": "### {value}"
+            "$format": {
+              "slot": "value",
+              "template": "### {value}"
+            }
           }
         },
         {
@@ -476,7 +480,9 @@
           "id": "headline_delta",
           "component": "Text",
           "text": {
-            "$text": "{delta}"
+            "$format": {
+              "slot": "delta"
+            }
           },
           "variant": "caption"
         },
@@ -513,6 +519,7 @@
           "id": "facts_row",
           "component": "Row",
           "justify": "spaceBetween",
+          "align": "center",
           "children": ["facts_label", "facts_value"]
         },
         {
@@ -527,7 +534,9 @@
           "id": "facts_value",
           "component": "Text",
           "text": {
-            "$slot": "value"
+            "$format": {
+              "slot": "value"
+            }
           }
         }
       ]
@@ -1058,8 +1067,13 @@
     },
     "steps": {
       "slots": ["items"],
-      "root": "steps_list",
+      "root": "steps_card",
       "components": [
+        {
+          "id": "steps_card",
+          "component": "Card",
+          "child": "steps_list"
+        },
         {
           "id": "steps_list",
           "component": "List",

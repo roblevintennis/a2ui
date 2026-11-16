@@ -837,6 +837,7 @@ class _ExpansionScope:
     item_pointer: str | None = None
     in_template_repeat: bool = False
     in_item_repeat: bool = False
+    declared_functions: frozenset[str] = frozenset()
     tracker: _ExpansionTracker = field(default_factory=_ExpansionTracker)
 
 
@@ -1258,9 +1259,201 @@ def _eval_text_wrapper(directive: Mapping[str, Any], scope: _ExpansionScope) -> 
     return _eval_text_directive(str(directive["$text"]), scope)
 
 
+_NUMERIC_FORMAT_TYPES = frozenset({"number", "integer", "count", "rating", "bounded"})
+
+
+def _extract_format_spec(
+    directive: Mapping[str, Any],
+) -> tuple[str, str | None, str | None]:
+    """Extracts `(slot_name, kind, template)` from a `$format` directive mapping."""
+    raw = directive["$format"]
+    if isinstance(raw, Mapping):
+        slot_name = str(raw["slot"])
+        kind = str(raw["kind"]) if raw.get("kind") is not None else None
+        template = str(raw["template"]) if raw.get("template") is not None else None
+        return slot_name, kind, template
+    return (
+        str(raw),
+        str(directive["kind"]) if directive.get("kind") is not None else None,
+        str(directive["template"]) if directive.get("template") is not None else None,
+    )
+
+
+def _format_literal_value(val: Any, template: str | None) -> str:
+    """Formats a non-pointer literal scalar, applying an optional `{value}` template."""
+    text = _literal_to_str(val)
+    if not template:
+        return text
+    if _HEADING_LINE_RE.match(template):
+        text = _escape_markdown_inline(text, in_heading=True)
+    return template.replace("{value}", text)
+
+
+def _format_string_call(expr: str) -> dict[str, Any]:
+    """Builds an A2UI v1.0 `formatString` function call for `expr`."""
+    return make_function_call("formatString", {"value": expr}, is_v10=True)
+
+
+def _wrap_format_template(
+    inner_expr: str,
+    fallback_call: dict[str, Any] | None,
+    ptr: str,
+    template: str | None,
+    declared: frozenset[str],
+) -> Any:
+    """Applies `template` via `formatString`, or returns `fallback_call` / DataBinding."""
+    if template and "formatString" in declared:
+        return _format_string_call(template.replace("{value}", inner_expr))
+    if fallback_call is not None:
+        return fallback_call
+    return make_data_binding(ptr, is_v10=True)
+
+
+def _format_currency_pointer(
+    ptr: str,
+    hints: Mapping[str, Any],
+    template: str | None,
+    declared: frozenset[str],
+) -> Any:
+    """Formats a currency pointer using `formatCurrency` when declared."""
+    if "formatCurrency" not in declared:
+        return _wrap_format_template(f"${{{ptr}}}", None, ptr, template, declared)
+    currency = str(hints.get("currency") or "USD").upper().replace("'", "")
+    call = make_function_call(
+        "formatCurrency",
+        {
+            "value": make_data_binding(ptr, is_v10=True),
+            "currency": currency,
+            "decimals": 2,
+        },
+        is_v10=True,
+    )
+    inner = f"${{formatCurrency(value:${{{ptr}}}, currency:'{currency}', decimals:2)}}"
+    return _wrap_format_template(inner, call, ptr, template, declared)
+
+
+def _format_unit_pointer(
+    ptr: str,
+    unit: str,
+    template: str | None,
+    declared: frozenset[str],
+) -> Any:
+    """Formats a pointer with a unit suffix using `formatString` and `formatNumber`."""
+    has_num = "formatNumber" in declared
+    if "formatString" not in declared:
+        if has_num:
+            return make_function_call(
+                "formatNumber",
+                {"value": make_data_binding(ptr, is_v10=True)},
+                is_v10=True,
+            )
+        return make_data_binding(ptr, is_v10=True)
+    num_expr = f"${{formatNumber(value:${{{ptr}}})}}" if has_num else f"${{{ptr}}}"
+    unit_expr = f"{num_expr} {unit}"
+    return _format_string_call(
+        template.replace("{value}", unit_expr) if template else unit_expr
+    )
+
+
+def _format_number_pointer(
+    ptr: str,
+    template: str | None,
+    declared: frozenset[str],
+    *,
+    decimals: int | None = None,
+) -> Any:
+    """Formats a numeric pointer using `formatNumber` when declared."""
+    if "formatNumber" not in declared:
+        return _wrap_format_template(f"${{{ptr}}}", None, ptr, template, declared)
+    args: dict[str, Any] = {"value": make_data_binding(ptr, is_v10=True)}
+    if decimals is not None:
+        args["decimals"] = decimals
+    call = make_function_call("formatNumber", args, is_v10=True)
+    dec_arg = f", decimals:{decimals}" if decimals is not None else ""
+    inner = f"${{formatNumber(value:${{{ptr}}}{dec_arg})}}"
+    return _wrap_format_template(inner, call, ptr, template, declared)
+
+
+def _format_percent_pointer(
+    ptr: str,
+    hints: Mapping[str, Any],
+    template: str | None,
+    declared: frozenset[str],
+) -> Any:
+    """Formats a percent or telemetry ratio pointer using available catalog functions."""
+    # Telemetry ratios in [-1, 1] carry scale=100; BasicCatalog has no multiply
+    # operator, so format as a 2-decimal number rather than appending '%' to 0.78.
+    if hints.get("format") == "percent" and hints.get("scale") == 100:
+        return _format_number_pointer(ptr, template, declared, decimals=2)
+    has_num = "formatNumber" in declared
+    if "formatString" in declared:
+        num_expr = f"${{formatNumber(value:${{{ptr}}})}}" if has_num else f"${{{ptr}}}"
+        pct_expr = f"{num_expr}%"
+        return _format_string_call(
+            template.replace("{value}", pct_expr) if template else pct_expr
+        )
+    if has_num:
+        return make_function_call(
+            "formatNumber",
+            {"value": make_data_binding(ptr, is_v10=True)},
+            is_v10=True,
+        )
+    return make_data_binding(ptr, is_v10=True)
+
+
+def _format_pointer_value(
+    ptr: str,
+    binding: SlotBinding,
+    kind: str | None,
+    template: str | None,
+    declared: frozenset[str],
+) -> Any:
+    """Formats a pointer-bound `$format` slot based on `format_hints` and `declared`."""
+    hints = binding.format_hints
+    if hints.get("alreadyFormatted"):
+        return _wrap_format_template(f"${{{ptr}}}", None, ptr, template, declared)
+    raw_sem = hints.get("semantic_type") or binding.semantic_type
+    sem_str = str(
+        raw_sem.value
+        if raw_sem is not None and hasattr(raw_sem, "value")
+        else raw_sem or ""
+    )
+
+    if kind == "currency" or sem_str == "currency" or "currency" in hints:
+        return _format_currency_pointer(ptr, hints, template, declared)
+    unit = hints.get("unit")
+    if isinstance(unit, str) and unit.strip():
+        return _format_unit_pointer(ptr, unit.strip(), template, declared)
+    if kind == "percent" or sem_str == "percent" or hints.get("format") == "percent":
+        return _format_percent_pointer(ptr, hints, template, declared)
+    if kind == "number" or sem_str in _NUMERIC_FORMAT_TYPES:
+        return _format_number_pointer(ptr, template, declared)
+    return _wrap_format_template(f"${{{ptr}}}", None, ptr, template, declared)
+
+
+def _eval_format_directive(directive: Mapping[str, Any], scope: _ExpansionScope) -> Any:
+    """Evaluates a `$format` directive against slot metadata and catalog functions."""
+    slot_name, kind, template = _extract_format_spec(directive)
+    binding = _lookup_slot(scope, slot_name)
+    if binding is None or not binding.bound:
+        if "$default" in directive:
+            return copy.deepcopy(directive["$default"])
+        return ""
+    if not binding.pointer:
+        if binding.literal is not None:
+            return _format_literal_value(binding.literal, template)
+        if "$default" in directive:
+            return copy.deepcopy(directive["$default"])
+        return ""
+    return _format_pointer_value(
+        binding.pointer, binding, kind, template, scope.declared_functions
+    )
+
+
 _DIRECTIVE_HANDLERS = {
     "$slot": _eval_slot_directive,
     "$text": _eval_text_wrapper,
+    "$format": _eval_format_directive,
     "$map": _eval_map_directive,
     "$event": _eval_event_directive,
     "$knobValue": _eval_knob_value_directive,
@@ -1409,6 +1602,7 @@ def _order_repeat_items(
             field_variants=scope.field_variants,
             item_fields=fields,
             item_index=idx,
+            declared_functions=scope.declared_functions,
             tracker=scope.tracker,
         )
         return _lookup_instance_or_knob(sub_scope, "primary") in (
@@ -1579,6 +1773,8 @@ def _expand_template_child_list(
             literal=v.literal,
             fields=v.fields,
             items=v.items,
+            semantic_type=v.semantic_type,
+            format_hints=v.format_hints,
         )
         for k, v in binding.fields.items()
     }
@@ -1593,6 +1789,7 @@ def _expand_template_child_list(
         item_pointer=binding.pointer,
         in_template_repeat=True,
         in_item_repeat=True,
+        declared_functions=scope.declared_functions,
         tracker=scope.tracker,
     )
     _ensure_template_emitted(tpl_local_id, tpl_id, templates_by_id, tpl_scope, emitted)
@@ -1630,6 +1827,7 @@ def _expand_single_repeat_item(
             item_pointer=elem_ptr,
             in_template_repeat=scope.in_template_repeat,
             in_item_repeat=is_item_repeat,
+            declared_functions=scope.declared_functions,
             tracker=scope.tracker,
         )
         fv_template = _select_field_variant_template(
@@ -1655,6 +1853,7 @@ def _expand_single_repeat_item(
         item_pointer=elem_ptr,
         in_template_repeat=scope.in_template_repeat,
         in_item_repeat=is_item_repeat,
+        declared_functions=scope.declared_functions,
         tracker=scope.tracker,
     )
     return _expand_inline_component(
@@ -1898,6 +2097,7 @@ def _remap_slot_binding(
         fields=_remap_field_dict(binding.fields, field_map),
         items=tuple(_remap_field_dict(it, field_map) for it in binding.items),
         semantic_type=binding.semantic_type,
+        format_hints=binding.format_hints,
     )
 
 
@@ -1959,6 +2159,7 @@ def _adapt_chart_slots(slots: dict[str, SlotBinding]) -> None:
         fields=fields,
         items=series.items,
         semantic_type=series.semantic_type,
+        format_hints=series.format_hints,
     )
 
 
@@ -2219,6 +2420,11 @@ class PatternExpander:
             owner = self.graph.catalogs[0].catalog_id
         return owner
 
+    def _declared_functions_for(self, base_pattern: str) -> frozenset[str]:
+        """Returns declared function names for the catalog owning `base_pattern`."""
+        owner = self._owner_catalog_id(base_pattern)
+        return frozenset(self.graph.declared_functions(owner))
+
     def _default_block_prefix(
         self, block_id: str, base_pattern: str
     ) -> tuple[str, str | None]:
@@ -2334,6 +2540,7 @@ class PatternExpander:
             knobs=active_knobs,
             instances=active_instances,
             field_variants=cat_pattern.field_variants,
+            declared_functions=self._declared_functions_for(cat_pattern.name),
             tracker=tracker,
         )
         emitted: list[dict[str, Any]] = []
@@ -2401,6 +2608,7 @@ class PatternExpander:
             instances={},
             field_variants=cat_pattern.field_variants,
             block_roots=tuple(block_roots),
+            declared_functions=self._declared_functions_for("page"),
             tracker=tracker,
         )
         emitted: list[dict[str, Any]] = []
