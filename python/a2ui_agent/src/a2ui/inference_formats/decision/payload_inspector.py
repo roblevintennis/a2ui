@@ -532,6 +532,32 @@ def _summarize_mapping_node(
     )
 
 
+def _append_sequence_pointers(
+    path: str,
+    value: Sequence[Any],
+    is_mutable: bool,
+    out: list[PointerSummary],
+) -> None:
+    """Appends `PointerSummary` entries for `value`, including grouped section arrays."""
+    parent_summary = _summarize_array(path, value, is_mutable)
+    inner_key = _detect_group_inner_key(value, parent_summary)
+    sections = (
+        _summarize_grouped_sections(path, value, inner_key, is_mutable)
+        if inner_key is not None
+        else []
+    )
+    if inner_key is not None and sections:
+        parent_hints = {
+            **parent_summary.hints,
+            "hasGroupedSections": "true",
+            "groupInnerKey": _escape_pointer_segment(inner_key),
+        }
+        out.append(replace(parent_summary, hints=parent_hints))
+        out.extend(sections)
+        return
+    out.append(parent_summary)
+
+
 def _traverse_mapping(
     node: Mapping[str, Any],
     prefix: str,
@@ -541,8 +567,7 @@ def _traverse_mapping(
     """Recursively walks `node` and appends `PointerSummary` entries to `out`."""
     for raw_key, value in node.items():
         raw_key_str = str(raw_key)
-        segment = _escape_pointer_segment(raw_key_str)
-        path = f"{prefix}/{segment}"
+        path = f"{prefix}/{_escape_pointer_segment(raw_key_str)}"
         is_mutable = _is_mutable_path(path, mutable_set)
         if isinstance(value, Mapping):
             out.append(_summarize_mapping_node(path, value, raw_key_str, is_mutable))
@@ -552,39 +577,24 @@ def _traverse_mapping(
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
         ):
-            parent_summary = _summarize_array(path, value, is_mutable)
-            inner_key = _detect_group_inner_key(value, parent_summary)
-            sections = (
-                _summarize_grouped_sections(path, value, inner_key, is_mutable)
-                if inner_key is not None
-                else []
-            )
-            if inner_key is not None and sections:
-                parent_hints = {
-                    **parent_summary.hints,
-                    "hasGroupedSections": "true",
-                    "groupInnerKey": _escape_pointer_segment(inner_key),
-                }
-                out.append(replace(parent_summary, hints=parent_hints))
-                out.extend(sections)
-                continue
-            out.append(parent_summary)
+            _append_sequence_pointers(path, value, is_mutable, out)
             continue
         scalar_type = _classify_value_type(value)
-        if scalar_type is not None:
-            sem_type, hints = classify_scalar(value, raw_key_str, siblings=node)
-            out.append(
-                PointerSummary(
-                    path=path,
-                    value_type=scalar_type,
-                    cardinality=1,
-                    mutable_hint=is_mutable,
-                    semantic_type=sem_type,
-                    hints=hints,
-                    key=raw_key_str,
-                    label=humanize_key(raw_key_str),
-                )
+        if scalar_type is None:
+            continue
+        sem_type, hints = classify_scalar(value, raw_key_str, siblings=node)
+        out.append(
+            PointerSummary(
+                path=path,
+                value_type=scalar_type,
+                cardinality=1,
+                mutable_hint=is_mutable,
+                semantic_type=sem_type,
+                hints=hints,
+                key=raw_key_str,
+                label=humanize_key(raw_key_str),
             )
+        )
 
 
 def inspect_payload_pointers(
