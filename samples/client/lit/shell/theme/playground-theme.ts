@@ -72,11 +72,10 @@ a2ui-surface {
   font-variant-numeric: tabular-nums;
 }
 
-/* Equal-height card stretching inside rows (a2ui-basic-row defaults to align-items: stretch) */
+/* Equal-height card stretching inside rows (keep height: auto so align-items: stretch works) */
 a2ui-surface a2ui-card {
   display: flex;
   flex-direction: column;
-  height: 100%;
   min-width: 0;
 }
 
