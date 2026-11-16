@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 from .models import SemanticType
@@ -349,6 +349,170 @@ def _summarize_array(
     )
 
 
+_GROUP_LABEL_PRIORITY: tuple[str, ...] = (
+    "title",
+    "name",
+    "category",
+    "section",
+    "heading",
+    "group",
+    "label",
+    "type",
+    "subject",
+)
+_GROUP_SUBTITLE_KEYS: frozenset[str] = frozenset({"description", "subtitle", "summary"})
+
+
+def _is_mapping_sequence(value: Any) -> bool:
+    """Returns whether `value` is a non-empty sequence containing mapping items."""
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and any(isinstance(el, Mapping) for el in value)
+    )
+
+
+def _is_sequence_or_missing(elem: Mapping[str, Any], key: str) -> bool:
+    """Returns whether `key` is absent or holds a non-string sequence in `elem`."""
+    if key not in elem:
+        return True
+    val = elem[key]
+    return isinstance(val, Sequence) and not isinstance(val, (str, bytes, bytearray))
+
+
+_NON_WRAPPER_ELEMENT_TYPES: frozenset[SemanticType] = frozenset({
+    SemanticType.IMAGE_URL,
+    SemanticType.MEDIA_OBJECT,
+    SemanticType.CURRENCY,
+    SemanticType.RATING,
+    SemanticType.OBJECT,
+})
+
+
+def _is_group_wrapper_summary(
+    summary: PointerSummary, mapping_items: Sequence[Mapping[str, Any]], inner_key: str
+) -> bool:
+    """Returns whether `summary` represents section headers wrapping nested item arrays."""
+    esc_inner = _escape_pointer_segment(inner_key)
+    other_keys = [k for k in summary.element_keys if k != esc_inner]
+    if len(other_keys) > 4:
+        return False
+    if any(
+        isinstance(el.get(k), Mapping)
+        for el in mapping_items
+        for k in el
+        if str(k) != inner_key
+    ):
+        return False
+    return not any(
+        summary.element_semantic_types.get(k) in _NON_WRAPPER_ELEMENT_TYPES
+        for k in other_keys
+    )
+
+
+def _detect_group_inner_key(
+    items: Sequence[Any], summary: PointerSummary
+) -> str | None:
+    """Finds a nested array-of-mappings key when `items` represents grouped sections."""
+    mapping_items = [el for el in items if isinstance(el, Mapping)]
+    if not mapping_items:
+        return None
+    candidates: list[str] = []
+    for el in mapping_items:
+        for key, val in el.items():
+            skey = str(key)
+            if _is_mapping_sequence(val) and skey not in candidates:
+                candidates.append(skey)
+    return next(
+        (
+            c
+            for c in candidates
+            if all(_is_sequence_or_missing(el, c) for el in mapping_items)
+            and _is_group_wrapper_summary(summary, mapping_items, c)
+        ),
+        None,
+    )
+
+
+def _is_group_text_scalar(val: Any) -> bool:
+    """Returns whether `val` is a non-empty string usable as a section label."""
+    return isinstance(val, str) and bool(val.strip())
+
+
+def _pick_group_label_key(elem: Mapping[str, Any], inner_key: str) -> str | None:
+    """Chooses the best scalar label key from one group element mapping."""
+    lower_map = {str(k).lower(): str(k) for k in elem if str(k) != inner_key}
+    for pref in _GROUP_LABEL_PRIORITY:
+        orig = lower_map.get(pref)
+        if orig is not None and _is_group_text_scalar(elem.get(orig)):
+            return orig
+    for key, val in elem.items():
+        skey = str(key)
+        low = skey.lower()
+        if skey != inner_key and low != "id" and not low.endswith("id"):
+            if _is_group_text_scalar(val):
+                return skey
+    return None
+
+
+def _pick_group_subtitle_key(
+    elem: Mapping[str, Any], inner_key: str, label_key: str | None
+) -> str | None:
+    """Chooses an optional short subtitle/description key from a group element."""
+    for key, val in elem.items():
+        skey = str(key)
+        if skey not in (inner_key, label_key) and (
+            skey.lower() in _GROUP_SUBTITLE_KEYS and _is_group_text_scalar(val)
+        ):
+            return skey
+    return None
+
+
+def _summarize_grouped_sections(
+    path: str,
+    items: Sequence[Any],
+    inner_key: str,
+    is_mutable: bool,
+) -> list[PointerSummary]:
+    """Builds `PointerSummary` entries for non-empty inner mapping arrays under `path`."""
+    sections: list[PointerSummary] = []
+    esc_inner = _escape_pointer_segment(inner_key)
+    for idx, elem in enumerate(items):
+        if not isinstance(elem, Mapping):
+            continue
+        inner_val = elem.get(inner_key)
+        if not _is_mapping_sequence(inner_val):
+            continue
+        section_path = f"{path}/{idx}/{esc_inner}"
+        base = _summarize_array(
+            section_path, cast(Sequence[Any], inner_val), is_mutable
+        )
+        label_key = _pick_group_label_key(elem, inner_key)
+        subtitle_key = _pick_group_subtitle_key(elem, inner_key, label_key)
+        hints: dict[str, str] = {
+            **base.hints,
+            "groupParent": path,
+            "groupIndex": str(idx),
+            "groupInnerKey": esc_inner,
+        }
+        sec_label = base.label
+        if label_key is not None:
+            esc_lbl = _escape_pointer_segment(label_key)
+            lbl_val = str(elem[label_key]).strip()
+            hints["groupLabelKey"] = esc_lbl
+            hints["groupLabelPointer"] = f"{path}/{idx}/{esc_lbl}"
+            hints["groupLabel"] = lbl_val
+            sec_label = lbl_val
+        if subtitle_key is not None:
+            esc_sub = _escape_pointer_segment(subtitle_key)
+            hints["groupSubtitlePointer"] = f"{path}/{idx}/{esc_sub}"
+            hints["groupSubtitle"] = str(elem[subtitle_key]).strip()
+        sections.append(
+            replace(base, hints=hints, label=sec_label, parent=f"{path}/{idx}")
+        )
+    return sections
+
+
 def _summarize_mapping_node(
     path: str,
     value: Mapping[str, Any],
@@ -368,6 +532,32 @@ def _summarize_mapping_node(
     )
 
 
+def _append_sequence_pointers(
+    path: str,
+    value: Sequence[Any],
+    is_mutable: bool,
+    out: list[PointerSummary],
+) -> None:
+    """Appends `PointerSummary` entries for `value`, including grouped section arrays."""
+    parent_summary = _summarize_array(path, value, is_mutable)
+    inner_key = _detect_group_inner_key(value, parent_summary)
+    sections = (
+        _summarize_grouped_sections(path, value, inner_key, is_mutable)
+        if inner_key is not None
+        else []
+    )
+    if inner_key is not None and sections:
+        parent_hints = {
+            **parent_summary.hints,
+            "hasGroupedSections": "true",
+            "groupInnerKey": _escape_pointer_segment(inner_key),
+        }
+        out.append(replace(parent_summary, hints=parent_hints))
+        out.extend(sections)
+        return
+    out.append(parent_summary)
+
+
 def _traverse_mapping(
     node: Mapping[str, Any],
     prefix: str,
@@ -377,8 +567,7 @@ def _traverse_mapping(
     """Recursively walks `node` and appends `PointerSummary` entries to `out`."""
     for raw_key, value in node.items():
         raw_key_str = str(raw_key)
-        segment = _escape_pointer_segment(raw_key_str)
-        path = f"{prefix}/{segment}"
+        path = f"{prefix}/{_escape_pointer_segment(raw_key_str)}"
         is_mutable = _is_mutable_path(path, mutable_set)
         if isinstance(value, Mapping):
             out.append(_summarize_mapping_node(path, value, raw_key_str, is_mutable))
@@ -388,23 +577,24 @@ def _traverse_mapping(
         if isinstance(value, Sequence) and not isinstance(
             value, (str, bytes, bytearray)
         ):
-            out.append(_summarize_array(path, value, is_mutable))
+            _append_sequence_pointers(path, value, is_mutable, out)
             continue
         scalar_type = _classify_value_type(value)
-        if scalar_type is not None:
-            sem_type, hints = classify_scalar(value, raw_key_str, siblings=node)
-            out.append(
-                PointerSummary(
-                    path=path,
-                    value_type=scalar_type,
-                    cardinality=1,
-                    mutable_hint=is_mutable,
-                    semantic_type=sem_type,
-                    hints=hints,
-                    key=raw_key_str,
-                    label=humanize_key(raw_key_str),
-                )
+        if scalar_type is None:
+            continue
+        sem_type, hints = classify_scalar(value, raw_key_str, siblings=node)
+        out.append(
+            PointerSummary(
+                path=path,
+                value_type=scalar_type,
+                cardinality=1,
+                mutable_hint=is_mutable,
+                semantic_type=sem_type,
+                hints=hints,
+                key=raw_key_str,
+                label=humanize_key(raw_key_str),
             )
+        )
 
 
 def inspect_payload_pointers(

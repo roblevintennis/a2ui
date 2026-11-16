@@ -1040,6 +1040,11 @@ def _try_bind_single_array(
     return SlotBinding(pointer=ptr.path, fields=fields, items=items)
 
 
+def _is_grouped_container(ptr: PointerSummary) -> bool:
+    """Returns whether `ptr` is an outer array wrapping grouped child arrays."""
+    return ptr.hints.get("hasGroupedSections") == "true"
+
+
 def _bind_array_repeated_slot(
     block_id: str,
     slot: SlotSpec,
@@ -1049,9 +1054,15 @@ def _bind_array_repeated_slot(
     scoped_actions: Sequence[ActionSpec] = (),
 ) -> SlotBinding:
     """Binds a repeated slot whose `from_types` is ``('array',)``."""
-    for ptr in pointers:
-        if ptr.path in used or ptr.value_type != "array" or ptr.cardinality <= 0:
-            continue
+    eligible = [
+        p
+        for p in pointers
+        if p.path not in used and p.value_type == "array" and p.cardinality > 0
+    ]
+    ordered = [p for p in eligible if not _is_grouped_container(p)] + [
+        p for p in eligible if _is_grouped_container(p)
+    ]
+    for ptr in ordered:
         bound = _try_bind_single_array(block_id, slot, ptr, scoped_actions)
         if bound is not None:
             return bound
@@ -1807,19 +1818,157 @@ def _try_recover_orphan_collection(
         actions_allowed=plan.actions_allowed,
         preset_knobs=col_preset,
     )
-    blocks.append(
-        PlannedBlock(
-            block_id="collection",
-            pattern=col_pat,
-            bindings=col_bindings,
-            variant_knobs=col_knobs,
-            instances=col_inst,
-        )
+    has_image = any(
+        p.semantic_type in {"image_url", "media_object"} for p in state.pointers
     )
+    col_block = PlannedBlock(
+        block_id="collection",
+        pattern=col_pat,
+        bindings=col_bindings,
+        variant_knobs=col_knobs,
+        instances=col_inst,
+    )
+    col_block = _adjust_collection_picture_layout(col_block, has_image)
+    col_block = _apply_collection_leading_fallback(col_block, state.payload)
+    blocks.append(col_block)
     recovered_ptrs = col_bindings.pointers()
     claimed.update(recovered_ptrs)
     state.orphan_pointers.update(recovered_ptrs)
     present_ids.add("collection")
+
+
+def _build_group_heading_block(
+    sec_ptr: PointerSummary,
+    sec_idx: int,
+    claimed: set[str],
+    planner: LayoutPlanner,
+) -> PlannedBlock | None:
+    """Builds a section heading `prose` block for grouped `sec_ptr`, if available."""
+    lbl_ptr = sec_ptr.hints.get("groupLabelPointer")
+    lbl_text = sec_ptr.hints.get("groupLabel")
+    if not lbl_ptr and not lbl_text:
+        return None
+    prose_spec = planner.grammar.block("prose")
+    resolved = _resolve_block_pattern(prose_spec, planner._capabilities)
+    if resolved is None:
+        return None
+    prose_pat, _ = resolved
+    heading_binding = (
+        SlotBinding(pointer=lbl_ptr, semantic_type=SemanticType.STRING)
+        if lbl_ptr
+        else SlotBinding(literal=lbl_text, semantic_type=SemanticType.STRING)
+    )
+    slots: dict[str, SlotBinding] = {"heading": heading_binding}
+    if lbl_ptr:
+        claimed.add(lbl_ptr)
+    sub_ptr = sec_ptr.hints.get("groupSubtitlePointer")
+    if sub_ptr:
+        slots["body"] = SlotBinding(pointer=sub_ptr, semantic_type=SemanticType.STRING)
+        claimed.add(sub_ptr)
+    return PlannedBlock(
+        block_id="prose",
+        id_prefix=f"prose_group_{sec_idx}",
+        pattern=prose_pat,
+        variant_knobs={"length": "line"},
+        bindings=BlockBindings(slots=slots),
+    )
+
+
+def _build_group_collection_block(
+    col_block: PlannedBlock,
+    bound_ptr: PointerSummary,
+    sec_ptr: PointerSummary,
+    sec_idx: int,
+    col_spec: BlockSpec,
+    has_image: bool,
+    state: PlannerState,
+    claimed: set[str],
+) -> PlannedBlock | None:
+    """Builds one section's `collection` block from `col_block` and `sec_ptr`."""
+    prefix = f"collection_group_{sec_idx}"
+    if sec_ptr.path == bound_ptr.path:
+        sec_block = replace(col_block, id_prefix=prefix)
+        claimed.update(sec_block.bindings.pointers())
+        return sec_block
+    items_slot = col_spec.slots["items"]
+    sec_item_binding = _try_bind_single_array(
+        "collection", items_slot, sec_ptr, state.actions
+    )
+    if sec_item_binding is None:
+        return None
+    sec_bindings = BlockBindings(
+        slots={**col_block.bindings.slots, "items": sec_item_binding}
+    )
+    sec_block = _adjust_collection_picture_layout(
+        replace(col_block, id_prefix=prefix, bindings=sec_bindings),
+        has_image,
+    )
+    sec_block = _apply_collection_leading_fallback(sec_block, state.payload)
+    claimed.update(sec_bindings.pointers())
+    return sec_block
+
+
+def _grouped_sections_for_collection(
+    blocks: Sequence[PlannedBlock],
+    state: PlannerState,
+) -> tuple[int, PlannedBlock, PointerSummary, list[PointerSummary]] | None:
+    """Resolves the collection index, bound section pointer, and sibling sections if grouped."""
+    col_idx = next(
+        (i for i, b in enumerate(blocks) if b.block_id == "collection"), None
+    )
+    if col_idx is None:
+        return None
+    col_block = blocks[col_idx]
+    items_slot = col_block.bindings.get("items")
+    if items_slot is None or not items_slot.pointer:
+        return None
+    bound_ptr = next((p for p in state.pointers if p.path == items_slot.pointer), None)
+    if bound_ptr is None:
+        return None
+    group_parent = bound_ptr.hints.get("groupParent")
+    if not group_parent:
+        return None
+    sections = [
+        p
+        for p in state.pointers
+        if p.hints.get("groupParent") == group_parent
+        and p.cardinality > 0
+        and not _is_excluded_pointer(p.path, state.exclude)
+    ]
+    return (col_idx, col_block, bound_ptr, sections) if sections else None
+
+
+def _expand_grouped_collection_blocks(
+    blocks: list[PlannedBlock],
+    claimed: set[str],
+    state: PlannerState,
+    planner: LayoutPlanner,
+) -> None:
+    """Expands a `collection` backed by grouped section arrays into heading + section blocks."""
+    resolved = _grouped_sections_for_collection(blocks, state)
+    if resolved is None:
+        return
+    col_idx, col_block, bound_ptr, sections = resolved
+    col_spec = planner.grammar.block("collection")
+    has_image = any(
+        p.semantic_type in {"image_url", "media_object"} for p in state.pointers
+    )
+    expanded: list[PlannedBlock] = []
+    from_orphan = bound_ptr.path in state.orphan_pointers
+    for idx, sec_ptr in enumerate(sections):
+        sec_block = _build_group_collection_block(
+            col_block, bound_ptr, sec_ptr, idx, col_spec, has_image, state, claimed
+        )
+        if sec_block is None:
+            continue
+        heading_block = _build_group_heading_block(sec_ptr, idx, claimed, planner)
+        if heading_block is not None:
+            expanded.append(heading_block)
+        expanded.append(sec_block)
+        if from_orphan:
+            state.orphan_pointers.add(sec_ptr.path)
+    if expanded:
+        blocks[col_idx : col_idx + 1] = expanded
 
 
 _SECRET_FACT_AVOID_KEYS = ("ssn", "api_key", "token", "iban", "password", "secret")
@@ -1944,6 +2093,7 @@ def apply_no_orphaned_pointers(
     present_ids = {b.block_id for b in blocks}
 
     _try_recover_orphan_collection(blocks, present_ids, claimed, plan, state, planner)
+    _expand_grouped_collection_blocks(blocks, claimed, state, planner)
 
     prose_ans = state.answers_by_id.get("gate:prose")
     allow_prose_fallback = (
@@ -2286,6 +2436,12 @@ def _block_has_required_bindings(block: PlannedBlock, spec: BlockSpec) -> bool:
         b.bound for b in block.bindings.slots.values()
     ):
         return False
+    if (
+        block.block_id == "prose"
+        and block.id_prefix
+        and block.bindings.is_bound("heading")
+    ):
+        return True
     for slot_name, slot_spec in spec.slots.items():
         if slot_spec.required and not block.bindings.is_bound(slot_name):
             return False
@@ -4445,6 +4601,13 @@ class LayoutPlanner:
         for block in plan.blocks:
             spec = self._grammar.block(block.block_id)
             for slot_name, slot_spec in spec.slots.items():
+                if (
+                    block.block_id == "prose"
+                    and block.id_prefix
+                    and slot_name == "body"
+                    and block.bindings.is_bound("heading")
+                ):
+                    continue
                 if self._is_required_slot(spec, slot_spec):
                     ratios.append(
                         self._required_slot_weakness(
