@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import json
 from typing import Any
 
 import pytest
 
 from a2ui.core.basic_catalog import BasicCatalog
 from a2ui.inference_formats.decision import (
+    ActionSpec,
     BackendCapabilities,
     DecisionAnswer,
     DecisionBackendError,
@@ -776,3 +778,95 @@ async def test_without_excluded_strips_excluded_subpaths_from_array_sample_point
     ]
     assert "secretToken" not in str(comp_messages)
     assert "photoUrl" not in str(comp_messages)
+
+
+@pytest.mark.asyncio
+async def test_grouped_nested_array_menu_synthesizes_all_sections_and_validates() -> (
+    None
+):
+    """Nested section arrays render all categories and dishes cleanly without ID collisions."""
+    payload = {
+        "restaurantName": "Sakura Artisanal Ramen & Izakaya",
+        "cuisine": "Japanese",
+        "menuSections": [
+            {
+                "category": "Starters & Izakaya",
+                "items": [
+                    {
+                        "id": "item-1",
+                        "name": "Pork Gyoza",
+                        "description": "Pan-fried pork and cabbage dumplings.",
+                        "price": "$9.50",
+                        "tags": ["Popular"],
+                    },
+                    {
+                        "id": "item-2",
+                        "name": "Agedashi Tofu",
+                        "description": "Deep-fried tofu blocks in savory dashi broth.",
+                        "price": "$8.00",
+                        "tags": ["Vegetarian Option"],
+                    },
+                ],
+            },
+            {
+                "category": "Ramen",
+                "items": [{
+                    "id": "item-4",
+                    "name": "Tonkotsu Black Garlic Ramen",
+                    "description": "Rich pork bone broth and chashu.",
+                    "price": "$17.50",
+                    "tags": ["Chef's Special"],
+                }],
+            },
+            {
+                "category": "Sushi & Sashimi",
+                "items": [{
+                    "id": "item-6",
+                    "name": "Chef's Sashimi Selection",
+                    "description": "9 pieces of fresh daily catch.",
+                    "price": "$26.00",
+                    "tags": ["Fresh Catch"],
+                }],
+            },
+        ],
+    }
+    synth = DecisionSynthesizer(
+        [CATALOG],
+        mock_backend(
+            family=("inspect", 0.90),
+            stakes=0.3,
+            urgency=0.2,
+            **{
+                "archetype:inspect": ("detail", 0.90),
+                "gate:prose": 0.80,
+                "gate:facts": 0.90,
+            },
+        ),
+    )
+    out = await synth.synthesize(
+        "Display the menu for a Japanese restaurant categorized by dishes with prices"
+        " and descriptions.",
+        payload,
+        title="Sakura Artisanal Ramen & Izakaya",
+        summary="Authentic Japanese cuisine crafted with seasonal ingredients.",
+        actions=[
+            ActionSpec(id="view_cart", label="View Order"),
+            ActionSpec(id="filter_menu", label="Filter Options"),
+        ],
+    )
+    assert out.layout_plan is not None
+    raw_msgs = to_message_dicts(out.messages)
+    validate_payload([CATALOG], out.messages)
+    comps = [
+        c
+        for d in raw_msgs
+        if "updateComponents" in d
+        for c in d["updateComponents"]["components"]
+    ]
+    comp_ids = [c["id"] for c in comps]
+    assert len(comp_ids) == len(set(comp_ids))
+    serialized = json.dumps(comps)
+    for idx in range(3):
+        assert f"/menuSections/{idx}/items" in serialized
+        assert f"/menuSections/{idx}/category" in serialized
+    assert "prose_group_0_prose_body" not in serialized

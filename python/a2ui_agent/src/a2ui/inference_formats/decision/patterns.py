@@ -777,6 +777,8 @@ def _shape_signature(pointers: Sequence[PointerSummary]) -> tuple[Any, ...]:
             tuple(sorted(p.sample_type_by_key.items())),
             tuple(sorted(p.element_semantic_types.items())),
             p.hints.get("wordCount"),
+            p.hints.get("groupParent"),
+            p.hints.get("groupLabelKey"),
             p.sample_pointers,
         )
         for p in pointers

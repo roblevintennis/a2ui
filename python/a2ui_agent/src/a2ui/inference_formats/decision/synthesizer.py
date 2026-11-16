@@ -1481,7 +1481,8 @@ class DecisionSynthesizer:
         block_roots: list[str] = []
         block_expansions: list[Expansion] = []
         for block in plan.blocks:
-            prefix, owner = self._block_prefix_and_owner(block.block_id, block.pattern)
+            prefix_base = block.id_prefix or block.block_id
+            prefix, owner = self._block_prefix_and_owner(prefix_base, block.pattern)
             expanded = self.expander.expand_block(
                 block.block_id,
                 block.pattern,
