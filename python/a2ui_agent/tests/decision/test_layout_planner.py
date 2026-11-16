@@ -1939,3 +1939,84 @@ def test_menu_enum_tags_never_bind_collection_icon_and_format_meta() -> None:
     for comp in exp.components:
         if comp.get("component") == "Icon":
             assert comp.get("name") in {"arrowForward", "info", "check", "error"}
+
+
+def test_grouped_nested_arrays_expand_section_headings_and_collections() -> None:
+    """Grouped nested arrays (`menuSections[i].items`) expand one heading + collection per section."""
+    grouped_payload = {
+        "restaurantName": "Sakura Artisanal Ramen & Izakaya",
+        "cuisine": "Japanese",
+        "menuSections": [
+            {
+                "category": "Starters & Izakaya",
+                "items": [
+                    {
+                        "id": "item-1",
+                        "name": "Pork Gyoza",
+                        "description": "Pan-fried pork and cabbage dumplings.",
+                        "price": "$9.50",
+                        "tags": ["Popular"],
+                    },
+                    {
+                        "id": "item-2",
+                        "name": "Agedashi Tofu",
+                        "description": "Deep-fried tofu in dashi broth.",
+                        "price": "$8.00",
+                        "tags": ["Vegetarian Option"],
+                    },
+                ],
+            },
+            {
+                "category": "Ramen",
+                "items": [{
+                    "id": "item-4",
+                    "name": "Tonkotsu Black Garlic Ramen",
+                    "description": "Rich pork bone broth and chashu.",
+                    "price": "$17.50",
+                    "tags": ["Chef's Special"],
+                }],
+            },
+        ],
+    }
+    for scripted in (
+        {
+            "family": ("inspect", 0.90),
+            "archetype:inspect": ("detail", 0.90),
+            "gate:prose": 0.90,
+            "gate:facts": 0.90,
+        },
+        {
+            "family": ("browse", 0.90),
+            "archetype:browse": ("feed", 0.90),
+            "gate:collection": 0.95,
+        },
+    ):
+        fixture = LayoutFixture(
+            name="japanese_menu",
+            intent=(
+                "Display the menu for a Japanese restaurant categorized by dishes with"
+                " prices."
+            ),
+            payload=grouped_payload,
+        )
+        _, _, _, out, _ = _run_fixture(fixture, scripted)
+        assert out.plan is not None
+        collections = [b for b in out.plan.blocks if b.block_id == "collection"]
+        assert len(collections) == 2
+        assert [c.bindings.slots["items"].pointer for c in collections] == [
+            "/menuSections/0/items",
+            "/menuSections/1/items",
+        ]
+        assert [c.id_prefix for c in collections] == [
+            "collection_group_0",
+            "collection_group_1",
+        ]
+        headings = [
+            b
+            for b in out.plan.blocks
+            if b.block_id == "prose" and b.id_prefix.startswith("prose_group_")
+        ]
+        assert [h.bindings.slots["heading"].pointer for h in headings] == [
+            "/menuSections/0/category",
+            "/menuSections/1/category",
+        ]
