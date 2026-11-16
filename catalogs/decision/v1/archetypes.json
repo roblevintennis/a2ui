@@ -727,7 +727,7 @@
               "from": ["image_url", "media_object"]
             },
             "icon": {
-              "from": ["icon", "enum", "tag"],
+              "from": ["icon"],
               "avoidKeys": ["id", "status", "state", "type", "kind", "tier", "role"]
             },
             "meta": {
