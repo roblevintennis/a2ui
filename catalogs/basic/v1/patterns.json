@@ -766,7 +766,9 @@
               "id": "item_meta",
               "component": "Text",
               "text": {
-                "$slot": "meta"
+                "$format": {
+                  "slot": "meta"
+                }
               }
             },
             {
@@ -881,7 +883,9 @@
               "id": "item_meta",
               "component": "Text",
               "text": {
-                "$slot": "meta"
+                "$format": {
+                  "slot": "meta"
+                }
               }
             },
             {
@@ -965,7 +969,9 @@
               "id": "item_meta",
               "component": "Text",
               "text": {
-                "$slot": "meta"
+                "$format": {
+                  "slot": "meta"
+                }
               },
               "variant": "caption"
             }
