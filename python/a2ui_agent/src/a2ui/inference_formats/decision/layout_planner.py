@@ -2006,28 +2006,37 @@ def _is_collection_picture_sparse(
     return with_pic * 2 < len(arr_val)
 
 
+def _apply_collection_leading_fallback(
+    block: PlannedBlock, payload: Any
+) -> PlannedBlock:
+    """Degrades sparse picture or unbound `icon` leading choices on a `collection`."""
+    if block.block_id != "collection":
+        return block
+    leading = block.variant_knobs.get("leading")
+    items = block.bindings.get("items")
+    has_icon = items is not None and "icon" in items.fields
+    if leading == "icon" and not has_icon:
+        return replace(block, variant_knobs={**block.variant_knobs, "leading": "none"})
+    if leading in {"thumbnail", "avatar"} and _is_collection_picture_sparse(
+        items, payload
+    ):
+        fallback = "icon" if has_icon else "none"
+        return replace(
+            block, variant_knobs={**block.variant_knobs, "leading": fallback}
+        )
+    return block
+
+
 def apply_leading_all_or_none(
     plan: LayoutPlan,
     state: PlannerState,
 ) -> LayoutPlan:
-    """Rule `leading-all-or-none`: falls back to `icon` or `none` if pictures are sparse."""
-    updated: list[PlannedBlock] = []
-    for block in plan.blocks:
-        if block.block_id == "collection" and block.variant_knobs.get("leading") in {
-            "thumbnail",
-            "avatar",
-        }:
-            items = block.bindings.get("items")
-            if _is_collection_picture_sparse(items, state.payload):
-                fallback = (
-                    "icon" if items is not None and "icon" in items.fields else "none"
-                )
-                block = replace(
-                    block,
-                    variant_knobs={**block.variant_knobs, "leading": fallback},
-                )
-        updated.append(block)
-    return replace(plan, blocks=tuple(updated))
+    """Rule `leading-all-or-none`: falls back to `icon` or `none` when sparse/unbound."""
+    updated = tuple(
+        _apply_collection_leading_fallback(block, state.payload)
+        for block in plan.blocks
+    )
+    return replace(plan, blocks=updated)
 
 
 def _degrade_group_instances(
@@ -3693,19 +3702,7 @@ class LayoutPlanner:
             p.semantic_type in {"image_url", "media_object"} for p in state.pointers
         )
         block = _adjust_collection_picture_layout(block, has_image)
-        if block.block_id != "collection" or block.variant_knobs.get("leading") not in {
-            "thumbnail",
-            "avatar",
-        }:
-            return block
-        items = block.bindings.get("items")
-        if not _is_collection_picture_sparse(items, state.payload):
-            return block
-        fallback = "icon" if items is not None and "icon" in items.fields else "none"
-        return replace(
-            block,
-            variant_knobs={**block.variant_knobs, "leading": fallback},
-        )
+        return _apply_collection_leading_fallback(block, state.payload)
 
     def _apply_region_urgency_rule(
         self, block: PlannedBlock, plan: LayoutPlan, state: PlannerState

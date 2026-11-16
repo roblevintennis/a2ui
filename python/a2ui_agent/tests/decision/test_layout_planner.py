@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+import json
 from typing import Any
 
 from a2ui.core import A2uiValidationError
@@ -1868,3 +1869,73 @@ def test_planner_populates_format_hints_from_pointer_summaries() -> None:
         "keyHint": "hours",
     }
     assert orphan_by_ptr["/formattedCost"].format_hints.get("alreadyFormatted") is True
+
+
+def test_menu_enum_tags_never_bind_collection_icon_and_format_meta() -> None:
+    """Domain enums like dietary tags go to `badge`/`meta`, never `icon`; price formats via `$format`."""
+    menu_fixture = LayoutFixture(
+        name="menu_enum_tags",
+        intent="Show a restaurant evening menu",
+        payload={
+            "restaurantName": "Lumina Bistro",
+            "dishes": [
+                {
+                    "name": "Truffled Arancini",
+                    "description": "Crispy risotto balls filled with wild mushrooms.",
+                    "dietary": "Vegetarian",
+                    "course": "Starters",
+                    "price": 14.5,
+                },
+                {
+                    "name": "Charred Octopus",
+                    "description": "Spanish octopus with smoked paprika oil.",
+                    "dietary": "GlutenFree",
+                    "course": "Starters",
+                    "price": 18,
+                },
+            ],
+        },
+    )
+    from a2ui.core.basic_catalog import BasicCatalog
+    from a2ui.inference_formats.decision import (
+        CatalogDecisionGraph,
+        MergedPatternLibrary,
+        PatternExpander,
+    )
+
+    grammar, _, answers, out, _ = _run_fixture(
+        menu_fixture,
+        {
+            "family": ("browse", 0.90),
+            "archetype:browse": ("feed", 0.90),
+            "gate:collection": 0.95,
+            "anatomy:collection.layout": ("rows", 0.90),
+            "anatomy:collection.leading": ("icon", 0.90),
+            "salience:/dishes": 2.8,
+            "salience:/restaurantName": 0.5,
+        },
+    )
+    del grammar, answers
+    assert out.plan is not None
+    collection = next(b for b in out.plan.blocks if b.block_id == "collection")
+    items = collection.bindings.get("items")
+    assert items is not None
+    assert "icon" not in items.fields
+    assert items.fields["meta"].pointer == "price"
+    assert items.fields["meta"].format_hints.get("semantic_type") == "currency"
+    assert collection.variant_knobs.get("leading") == "none"
+
+    cat = BasicCatalog("v1.0")
+    expander = PatternExpander(
+        MergedPatternLibrary.for_catalogs([cat]), CatalogDecisionGraph([cat])
+    )
+    exp = expander.expand_block(
+        "collection", "collection", collection.bindings, knobs=collection.variant_knobs
+    )
+    serialized = json.dumps(list(exp.components))
+    assert "_Vegetarian" not in serialized
+    assert "formatCurrency" in serialized
+    assert '"currency": "USD"' in serialized
+    for comp in exp.components:
+        if comp.get("component") == "Icon":
+            assert comp.get("name") in {"arrowForward", "info", "check", "error"}
