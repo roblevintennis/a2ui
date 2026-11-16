@@ -78,6 +78,8 @@ Rules:
   confirmation, the updated record, or the next step.
 - Set `layout` only when the person names a layout role explicitly; otherwise
   leave it out.
+- Set `"title"` to a short noun-phrase heading for newly generated blocks (for
+  example `"Order Details"` or `"Flight Options"`, not `"Show order details"`).
 - The `intent` is one sentence naming what the data is and how the person
   should see or interact with it."""
 

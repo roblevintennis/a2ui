@@ -106,6 +106,12 @@ export class A2UILayoutEditor extends SignalWatcher(LitElement) {
       :host([inspector-layout]) {
         max-width: 1480px;
         padding: 0 16px;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      :host([inspector-layout]) #surfaces {
+        padding: 20px 0;
       }
 
       :host([inspector-layout][inspector-collapsed]) {
@@ -731,13 +737,7 @@ export class A2UILayoutEditor extends SignalWatcher(LitElement) {
     this.config = (appKey && configs[appKey]) || restaurantConfig;
 
     // Set the CSS Overrides for the given appKey.
-    if (
-      this.config.cssOverrides &&
-      Array.isArray(document.adoptedStyleSheets) &&
-      !document.adoptedStyleSheets.includes(this.config.cssOverrides)
-    ) {
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, this.config.cssOverrides];
-    }
+    this.#adoptConfigStyles();
     document.title = this.config.title;
 
     // Initialize client with configured URL
@@ -745,9 +745,33 @@ export class A2UILayoutEditor extends SignalWatcher(LitElement) {
   }
 
   /**
+   * Idempotently adopts `config.cssOverrides` onto both `document` and `this.shadowRoot`
+   * so token overrides and Light DOM surface selectors apply inside `<a2ui-shell>`.
+   */
+  #adoptConfigStyles() {
+    const sheet = this.config.cssOverrides;
+    if (!sheet) return;
+    if (
+      Array.isArray(document.adoptedStyleSheets) &&
+      !document.adoptedStyleSheets.includes(sheet)
+    ) {
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }
+    const root = this.shadowRoot;
+    if (
+      root &&
+      Array.isArray(root.adoptedStyleSheets) &&
+      !root.adoptedStyleSheets.includes(sheet)
+    ) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
+    }
+  }
+
+  /**
    * Synchronizes host layout classes and attributes with the inspector state after each update.
    */
   protected override updated() {
+    this.#adoptConfigStyles();
     const inspectorEnabled = this.#isInspectorEnabled();
     this.classList.toggle('inspector-layout', inspectorEnabled);
     this.classList.toggle('inspector-collapsed', inspectorEnabled && !this._inspectorOpen);
@@ -787,6 +811,7 @@ export class A2UILayoutEditor extends SignalWatcher(LitElement) {
    * Flushes any queued snackbar messages once the shell DOM is first rendered.
    */
   protected override firstUpdated() {
+    this.#adoptConfigStyles();
     if (this._pendingSnackbarMessages.length > 0) {
       for (const {message, replaceAll} of this._pendingSnackbarMessages) {
         this.snackbar.show(message, replaceAll);

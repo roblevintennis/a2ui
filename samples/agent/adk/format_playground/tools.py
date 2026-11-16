@@ -160,6 +160,15 @@ TOOL_INTENTS: dict[str, str] = {
     "get_deploy_runbook": "Follow step-by-step production deployment runbook",
 }
 
+TOOL_TITLES: dict[str, str] = {
+    "get_host_health": "Host Health",
+    "get_resort": "Mountain Ski Resorts",
+    "get_transfer_quote": "Wire Transfer Quote",
+    "get_playback_settings": "Playback Settings",
+    "get_order_details": "Order Details",
+    "get_deploy_runbook": "Production Deployment Runbook",
+}
+
 TOOL_MUTABLE_PATHS: dict[str, tuple[str, ...]] = {
     "get_host_health": (),
     "get_resort": (),

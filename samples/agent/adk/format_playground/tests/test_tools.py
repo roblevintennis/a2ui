@@ -30,6 +30,7 @@ from tools import (
     TOOL_ACTIONS,
     TOOL_INTENTS,
     TOOL_MUTABLE_PATHS,
+    TOOL_TITLES,
     TOOLS,
     get_deploy_runbook,
     get_host_health,
@@ -59,6 +60,19 @@ def test_all_tools_have_intents_and_mutable_paths() -> None:
         assert name in TOOL_MUTABLE_PATHS
         assert name in TOOL_ACTIONS
         assert TOOL_INTENTS[name]
+
+
+def test_all_tools_have_noun_phrase_titles() -> None:
+    """Verifies every tool in `TOOLS` has a non-empty noun-phrase title in `TOOL_TITLES`."""
+    imperative_prefixes = ("Show ", "Follow ", "Track ", "Estimate ")
+    for tool in TOOLS:
+        name = getattr(tool, "__name__", "")
+        assert name in TOOL_TITLES
+        title = TOOL_TITLES[name].strip()
+        assert title
+        assert not title.startswith(
+            imperative_prefixes
+        ), f"Title for {name} looks imperative: {title!r}"
 
 
 def test_tool_direct_calls() -> None:

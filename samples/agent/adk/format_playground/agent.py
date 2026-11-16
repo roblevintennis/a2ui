@@ -77,6 +77,7 @@ from tools import (
     TOOL_ACTIONS,
     TOOL_INTENTS,
     TOOL_MUTABLE_PATHS,
+    TOOL_TITLES,
     TOOLS,
     run_example_tool,
 )
@@ -834,6 +835,7 @@ class PlaygroundAgent:
         tool_name, payload = invoked
         surface_id = surface_id_for(next_settings, RenderMode.TOOL)
         intent = TOOL_INTENTS[tool_name]
+        title = TOOL_TITLES.get(tool_name)
         mutable_paths = tuple(TOOL_MUTABLE_PATHS.get(tool_name, ()))
         actions = tuple(TOOL_ACTIONS.get(tool_name, ()))
         block = DecisionBlock(
@@ -841,6 +843,7 @@ class PlaygroundAgent:
             payload=payload,
             mutable_paths=mutable_paths,
             actions=actions,
+            title=title,
         )
         result = await self.renderers.render_tool_result(
             intent,
@@ -849,6 +852,7 @@ class PlaygroundAgent:
             version=version,
             mutable_paths=mutable_paths,
             actions=actions,
+            title=title,
             conversation_id=session_id,
         )
         metrics = result.metrics or TurnMetrics(
@@ -1227,6 +1231,7 @@ class PlaygroundAgent:
         surface_id = surface_id_for(settings, RenderMode.TOOL)
         tool_result = tool_turn.result
         intent = TOOL_INTENTS.get(tool_turn.tool_name, "Tool Result")
+        title = TOOL_TITLES.get(tool_turn.tool_name)
         mutable_paths = tuple(TOOL_MUTABLE_PATHS.get(tool_turn.tool_name, ()))
         actions = tuple(TOOL_ACTIONS.get(tool_turn.tool_name, ()))
         block = DecisionBlock(
@@ -1234,6 +1239,7 @@ class PlaygroundAgent:
             payload=tool_result,
             mutable_paths=mutable_paths,
             actions=actions,
+            title=title,
         )
 
         result = await self.renderers.render_tool_result(
@@ -1243,6 +1249,7 @@ class PlaygroundAgent:
             version=version,
             mutable_paths=mutable_paths,
             actions=actions,
+            title=title,
             conversation_id=session_id,
         )
 

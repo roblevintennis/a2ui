@@ -702,6 +702,7 @@ class Renderers:
         version: str = DECISION_VERSION,
         mutable_paths: Sequence[str] = (),
         actions: Sequence[ActionSpec] = (),
+        title: str | None = None,
         conversation_id: str | None = None,
     ) -> RenderResult:
         """Renders tool output directly via the decision synthesizer.
@@ -713,6 +714,7 @@ class Renderers:
             version: A2UI protocol version string (defaults to `"1.0"`).
             mutable_paths: Editable JSON Pointer paths for form bindings.
             actions: Action button specifications for the surface.
+            title: Optional authored noun-phrase surface title.
             conversation_id: Optional conversation identifier for stateful
                 updates and `PlanCache` reuse.
 
@@ -724,6 +726,7 @@ class Renderers:
             payload=payload,
             mutable_paths=tuple(mutable_paths),
             actions=tuple(actions),
+            title=title,
         )
         return await self.render_decision(
             block,

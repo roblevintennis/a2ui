@@ -25,7 +25,7 @@ import pytest
 from a2ui.core.basic_catalog import BasicCatalog
 from a2ui.inference_formats.decision import DecisionBlock, DeterministicMockBackend
 from a2ui.utils import validate_payload
-from fakes import FakeLlmCaller
+from fakes import FakeLlmCaller, HOST_ANSWERS, scripted_backend
 from modes import RenderMode
 from renderers import Renderers, backend_display_name, stage2_user_text
 
@@ -521,3 +521,27 @@ async def test_render_tool_result_synthesizes_with_zero_llm_calls() -> None:
     )
     assert with_fallback.ok
     assert "Explicit Fallback DSL" in json.dumps(messages_of(with_fallback.parts))
+
+
+@pytest.mark.asyncio
+async def test_render_tool_result_propagates_title() -> None:
+    """Verifies `render_tool_result` forwards `title` into `PageBindings.title`."""
+    tool_renderers = Renderers(versions=["1.0"], backend=scripted_backend(HOST_ANSWERS))
+    res = await tool_renderers.render_tool_result(
+        "Show CPU utilization and host health",
+        {
+            "host": "prod-1",
+            "cpu": 0.78,
+            "cpuDelta": 0.12,
+            "status": "degraded",
+            "uptimeHours": 412,
+        },
+        surface_id="turn-tool-title",
+        version="1.0",
+        title="Host Health",
+    )
+    assert res.ok, res.error
+    assert res.output is not None
+    assert res.output.layout_plan is not None
+    assert res.output.layout_plan.page.title.literal == "Host Health"
+    assert "Host Health" in json.dumps(messages_of(res.parts))
