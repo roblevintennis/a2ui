@@ -490,6 +490,71 @@ class TestPayloadInspector:
         assert by_path["/format"].mutable_hint is False
         assert by_path["/format/theme"].mutable_hint is False
 
+    def test_grouped_nested_arrays_emit_section_pointers_with_group_hints(
+        self,
+    ) -> None:
+        payload = {
+            "restaurantName": "Sakura Artisanal Ramen & Izakaya",
+            "menuSections": [
+                {
+                    "category": "Starters & Izakaya",
+                    "items": [{
+                        "id": "item-1",
+                        "name": "Pork Gyoza",
+                        "description": "Pan-fried pork dumplings.",
+                        "price": "$9.50",
+                        "tags": ["Popular"],
+                    }],
+                },
+                {
+                    "category": "Ramen",
+                    "items": [],
+                },
+                {
+                    "category": "Sushi & Sashimi",
+                    "items": [{
+                        "id": "item-6",
+                        "name": "Chef's Sashimi Selection",
+                        "description": "9 pieces of fresh daily catch.",
+                        "price": "$26.00",
+                        "tags": ["Fresh Catch"],
+                    }],
+                },
+            ],
+        }
+        pointers = inspect_payload_pointers(payload)
+        by_path = {p.path: p for p in pointers}
+
+        assert "/menuSections" in by_path
+        assert by_path["/menuSections"].hints.get("hasGroupedSections") == "true"
+        assert "/menuSections/0/items" in by_path
+        assert "/menuSections/1/items" not in by_path
+        assert "/menuSections/2/items" in by_path
+
+        starters = by_path["/menuSections/0/items"]
+        assert starters.value_type == "array"
+        assert starters.label == "Starters & Izakaya"
+        assert starters.parent == "/menuSections/0"
+        assert starters.element_keys == ("id", "name", "description", "price", "tags")
+        assert starters.hints["groupParent"] == "/menuSections"
+        assert starters.hints["groupIndex"] == "0"
+        assert starters.hints["groupLabel"] == "Starters & Izakaya"
+        assert starters.hints["groupLabelPointer"] == "/menuSections/0/category"
+
+    def test_rich_flat_items_with_sub_array_do_not_promote_sub_array(self) -> None:
+        payload = {
+            "dishes": [{
+                "id": "d1",
+                "name": "Ramen",
+                "price": "$17.50",
+                "rating": 4.9,
+                "modifiers": [{"name": "Extra Egg", "price": "$2.00"}],
+            }]
+        }
+        pointers = inspect_payload_pointers(payload)
+        assert [p.path for p in pointers] == ["/dishes"]
+        assert "hasGroupedSections" not in pointers[0].hints
+
 
 class TestCatalogDecisionGraph:
     """Tests for dynamic CatalogDecisionGraph extraction across custom domains."""
