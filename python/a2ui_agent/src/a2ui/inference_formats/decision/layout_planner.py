@@ -731,6 +731,17 @@ def _bind_key_fallback_slot(
     return SlotBinding()
 
 
+def _pointer_format_hints(ptr: PointerSummary) -> dict[str, Any]:
+    """Builds `SlotBinding.format_hints` from `ptr.semantic_type` and `ptr.hints`."""
+    hints: dict[str, Any] = {"semantic_type": ptr.semantic_type, **ptr.hints}
+    if ptr.value_type == "string" and ptr.semantic_type in {
+        SemanticType.CURRENCY,
+        SemanticType.QUANTITY,
+    }:
+        hints["alreadyFormatted"] = True
+    return hints
+
+
 def _bind_scalar_slot(
     slot: SlotSpec,
     pointers: Sequence[PointerSummary],
@@ -760,7 +771,11 @@ def _bind_scalar_slot(
                 literal=opts,
                 items=({"$claimed": SlotBinding(pointer=best.path)},),
             )
-    return SlotBinding(pointer=best.path, semantic_type=best.semantic_type)
+    return SlotBinding(
+        pointer=best.path,
+        semantic_type=best.semantic_type,
+        format_hints=_pointer_format_hints(best),
+    )
 
 
 def _action_slot_binding(
@@ -860,11 +875,11 @@ def _bind_element_field_pass(
         )
         if best_key is not None:
             used_keys.add(best_key)
+            elem_sem = arr_ptr.element_semantic_types.get(best_key, SemanticType.STRING)
             bound_fields[field_name] = SlotBinding(
                 pointer=best_key,
-                semantic_type=arr_ptr.element_semantic_types.get(
-                    best_key, SemanticType.STRING
-                ),
+                semantic_type=elem_sem,
+                format_hints={"semantic_type": elem_sem},
             )
         elif min_score == 0 and not arr_ptr.element_keys and field_spec.required:
             bound_fields[field_name] = SlotBinding(pointer="")
@@ -915,6 +930,11 @@ def _bind_repeated_element_field(
                 semantic_type=arr_ptr.element_semantic_types.get(
                     ek, SemanticType.STRING
                 ),
+                format_hints={
+                    "semantic_type": arr_ptr.element_semantic_types.get(
+                        ek, SemanticType.STRING
+                    )
+                },
             ),
         }
         for ek in candidates
@@ -963,6 +983,7 @@ def _unroll_single_array_item(
                     else f"{ptr.path}/{idx}"
                 ),
                 semantic_type=f_bind.semantic_type,
+                format_hints=f_bind.format_hints,
             )
     return row
 
@@ -1076,7 +1097,11 @@ def _bind_groups_slot(
         row_items = tuple(
             {
                 "label": SlotBinding(literal=row.label or humanize_key(row.key)),
-                "value": SlotBinding(pointer=row.path),
+                "value": SlotBinding(
+                    pointer=row.path,
+                    semantic_type=row.semantic_type,
+                    format_hints=_pointer_format_hints(row),
+                ),
             }
             for row in child_rows
         )
@@ -1114,7 +1139,11 @@ def _bind_sibling_item_field(
                     literal=opts,
                     items=({"$claimed": SlotBinding(pointer=sib.path)},),
                 )
-    return SlotBinding(pointer=sib.path)
+    return SlotBinding(
+        pointer=sib.path,
+        semantic_type=sib.semantic_type,
+        format_hints=_pointer_format_hints(sib),
+    )
 
 
 def _build_scalar_item_mapping(
@@ -1137,7 +1166,11 @@ def _build_scalar_item_mapping(
             if sib is not None:
                 item[f_name] = _bind_sibling_item_field(block_id, f_name, sib, payload)
         elif f_name == "value" or "any" in f_spec.from_types:
-            item[f_name] = SlotBinding(pointer=ptr.path)
+            item[f_name] = SlotBinding(
+                pointer=ptr.path,
+                semantic_type=ptr.semantic_type,
+                format_hints=_pointer_format_hints(ptr),
+            )
     return item
 
 
@@ -1665,7 +1698,11 @@ def _find_unused_mark_pointer(
             and ptr.semantic_type == "image_url"
             and _is_avoided_key(ptr, tuple(_MARK_KEY_HINTS))
         ):
-            return SlotBinding(pointer=ptr.path)
+            return SlotBinding(
+                pointer=ptr.path,
+                semantic_type=ptr.semantic_type,
+                format_hints=_pointer_format_hints(ptr),
+            )
     return SlotBinding()
 
 
@@ -4300,7 +4337,11 @@ class LayoutPlanner:
             title_ptr = _page_title_pointer(state.pointers)
             if title_ptr is not None:
                 state.page_claimed_pointers.add(title_ptr.path)
-                title_binding = SlotBinding(pointer=title_ptr.path)
+                title_binding = SlotBinding(
+                    pointer=title_ptr.path,
+                    semantic_type=title_ptr.semantic_type,
+                    format_hints=_pointer_format_hints(title_ptr),
+                )
             else:
                 title_binding = SlotBinding(literal=state.intent)
         return PageBindings(
