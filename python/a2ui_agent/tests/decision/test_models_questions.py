@@ -631,7 +631,7 @@ def test_pointer_summary_defaults_key_and_parent() -> None:
     assert summary.parent == "/photos/0"
     assert summary.semantic_type == "string"
     assert summary.hints == {}
-    assert summary.label == "Url"
+    assert summary.label == "URL"
     assert summary.element_semantic_types == {}
     assert summary.sample_pointers == ()
     explicit = PointerSummary(
