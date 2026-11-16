@@ -112,4 +112,9 @@ a2ui-surface .a2ui-button {
   font-size: 0.875rem;
   transition: background-color 0.15s ease;
 }
+
+/* Clip unmapped icon ligature fallback text inside the 24px icon box */
+a2ui-surface .a2ui-icon {
+  overflow: hidden;
+}
 `);
